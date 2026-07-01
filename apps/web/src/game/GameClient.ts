@@ -72,9 +72,9 @@ export class GameClient {
   onPresentation?: (s: PresentationUiState) => void;
   readonly displayName: string;
 
-  constructor(url: string, name: string, avatarId: number) {
+  constructor(url: string, name: string, avatarId: number, spaceId = "default", token?: string) {
     this.displayName = name;
-    this.conn = new Connection(url, name, avatarId);
+    this.conn = new Connection(url, name, avatarId, spaceId, token);
     this.conn.onWelcome = () => this.onWelcome();
     this.conn.onCorrection = (x, y, f) => {
       this.self.x = x;

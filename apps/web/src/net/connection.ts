@@ -87,11 +87,18 @@ export class Connection {
     private readonly name: string,
     private readonly avatarId: number,
     private readonly spaceId = "default",
+    private readonly token?: string,
   ) {
     this.ws = new WebSocket(url);
     this.ws.binaryType = "arraybuffer";
     this.ws.onopen = () => {
-      this.send({ t: "join", spaceId: this.spaceId, name: this.name, avatarId: this.avatarId });
+      this.send({
+        t: "join",
+        spaceId: this.spaceId,
+        name: this.name,
+        avatarId: this.avatarId,
+        token: this.token,
+      });
     };
     this.ws.onclose = () => this.setStatus("closed");
     this.ws.onerror = () => this.setStatus("error");
