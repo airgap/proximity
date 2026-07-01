@@ -15,6 +15,11 @@ rtc:
 keys:
   devkey: secret_devsecret_change_me_1234567890
 
+# Redis enables Egress coordination (and multi-node in prod). LiveKit runs host-networked in
+# local dev, so it reaches the redis container via the published host port 6399.
+redis:
+  address: 127.0.0.1:6399
+
 # Rooms auto-close shortly after the last participant leaves.
 room:
   empty_timeout: 300

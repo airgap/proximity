@@ -23,6 +23,21 @@ services:
       timeout: 3s
       retries: 5
 
+  # LiveKit Egress: records rooms (headless Chrome + ffmpeg) to S3-compatible storage.
+  egress:
+    image: livekit/egress:latest
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./livekit/egress.yaml:/etc/egress.yaml:ro
+    cap_add:
+      - SYS_ADMIN # required for the Chrome sandbox
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # reach host-networked LiveKit + MinIO
+    depends_on:
+      - redis
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:

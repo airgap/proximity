@@ -123,7 +123,45 @@ export interface PingMessage {
   cTime: number;
 }
 
-export type ClientMessage = JoinMessage | MoveMessage | ChatMessage | PingMessage;
+/** A point in the shared surface's normalized 0..1 coordinate space (resolution-independent). */
+export interface StrokePoint {
+  x: number;
+  y: number;
+}
+
+/** Start/stop presentation mode (elevates the caller's screenshare to the whole space). */
+export interface PresentationControlMessage {
+  t: "presentation";
+  action: "start" | "stop";
+  /** Request server-side recording (LiveKit Egress) for this presentation. */
+  record?: boolean;
+}
+
+/** Append points to an annotation stroke drawn over the shared surface. */
+export interface StrokeMessage {
+  t: "stroke";
+  strokeId: string;
+  color: string;
+  width: number;
+  /** New points appended since the last message for this stroke. */
+  points: StrokePoint[];
+  /** True on the final delta for this stroke. */
+  done: boolean;
+}
+
+/** Clear all annotations. */
+export interface StrokeClearMessage {
+  t: "strokeClear";
+}
+
+export type ClientMessage =
+  | JoinMessage
+  | MoveMessage
+  | ChatMessage
+  | PingMessage
+  | PresentationControlMessage
+  | StrokeMessage
+  | StrokeClearMessage;
 
 // ---------------------------------------------------------------------------
 // Server -> Client (JSON / text frames)
@@ -204,6 +242,44 @@ export interface ProximityMessage {
   remove: string[];
 }
 
+/** Current presentation state for the space (broadcast on change + on join). */
+export interface PresentationStateMessage {
+  t: "presentationState";
+  active: boolean;
+  presenterId?: string;
+  presenterName?: string;
+  recording?: boolean;
+}
+
+/** A full annotation stroke (used in snapshots for late joiners). */
+export interface FullStroke {
+  strokeId: string;
+  color: string;
+  width: number;
+  points: StrokePoint[];
+}
+
+/** Rebroadcast of an annotation stroke delta to other viewers. */
+export interface StrokeBroadcast {
+  t: "stroke";
+  strokeId: string;
+  color: string;
+  width: number;
+  points: StrokePoint[];
+  done: boolean;
+}
+
+/** All current annotation strokes, sent when a client enters an active presentation. */
+export interface StrokeSnapshotMessage {
+  t: "strokeSnapshot";
+  strokes: FullStroke[];
+}
+
+/** Clear-all rebroadcast. */
+export interface StrokeClearBroadcast {
+  t: "strokeClear";
+}
+
 export interface PongMessage {
   t: "pong";
   cTime: number;
@@ -224,6 +300,10 @@ export type ServerMessage =
   | ChatHistoryMessage
   | CorrectionMessage
   | ProximityMessage
+  | PresentationStateMessage
+  | StrokeBroadcast
+  | StrokeSnapshotMessage
+  | StrokeClearBroadcast
   | PongMessage
   | ErrorMessage;
 

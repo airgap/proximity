@@ -1,0 +1,12 @@
+# LiveKit Egress config for LOCAL DEV.
+# The egress container runs headless Chrome + ffmpeg to record rooms. It coordinates with
+# LiveKit over Redis and joins rooms as a hidden recorder participant over ws_url.
+redis:
+  # Egress is on the compose bridge network; it reaches the redis container by service name.
+  address: redis:6379
+api_key: devkey
+api_secret: secret_devsecret_change_me_1234567890
+# LiveKit runs host-networked; from inside the egress container the host is host.docker.internal.
+ws_url: ws://host.docker.internal:7880
+insecure: true
+log_level: info

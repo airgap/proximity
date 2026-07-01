@@ -33,8 +33,12 @@ const ServerEnvSchema = z.object({
 
   // LiveKit (media). Optional until phase 2.
   LIVEKIT_URL: z.string().optional(),
+  /** Server-side LiveKit HTTP API url (defaults to LIVEKIT_URL with ws->http). */
+  LIVEKIT_HTTP_URL: z.string().optional(),
   LIVEKIT_API_KEY: z.string().optional(),
   LIVEKIT_API_SECRET: z.string().optional(),
+  /** Optional custom egress template url (bakes annotations into the recording). */
+  EGRESS_TEMPLATE_URL: z.string().optional(),
 
   // S3-compatible object storage (recordings/assets). Optional until phase 4.
   // Endpoint empty => AWS S3 virtual-hosted; set + force-path-style for MinIO/DO Spaces.
@@ -44,6 +48,18 @@ const ServerEnvSchema = z.object({
   S3_ACCESS_KEY: z.string().optional(),
   S3_SECRET_KEY: z.string().optional(),
   S3_FORCE_PATH_STYLE: bool.default("false"),
+  /**
+   * S3 endpoint as seen by the LiveKit Egress CONTAINER (which may differ from the app's
+   * endpoint due to container networking). Defaults to S3_ENDPOINT. In local Docker this is
+   * typically http://host.docker.internal:9100 or http://minio:9000.
+   */
+  EGRESS_S3_ENDPOINT: z.string().optional(),
+
+  // Post-processing worker model paths (Parabun speech/llm). Optional.
+  WHISPER_MODEL: z.string().optional(),
+  LLM_MODEL: z.string().optional(),
+  /** How often the worker polls for recordings to process, ms. */
+  WORKER_POLL_MS: z.coerce.number().int().positive().default(5000),
 });
 
 export type ServerEnv = z.infer<typeof ServerEnvSchema>;

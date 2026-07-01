@@ -53,6 +53,93 @@ export interface ChatStore {
   recent(spaceId: string, limit: number): Promise<ChatRecord[]>;
 }
 
+// ---------------------------------------------------------------------------
+// Recording store (LiveKit Egress metadata)
+// ---------------------------------------------------------------------------
+
+export interface RecordingRow {
+  egressId: string;
+  spaceId: string;
+  status: string;
+  s3VideoKey: string | null;
+  durationMs: number | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+export interface RecordingStore {
+  /** Called from the egress_started webhook. Idempotent. */
+  started(egressId: string, spaceId: string, presenterId: string | null): Promise<void>;
+  /** Called from the egress_ended webhook. */
+  ended(egressId: string, status: string, s3VideoKey: string | null, durationMs: number | null): Promise<void>;
+  /** Rows whose post-processing hasn't run yet (status = 'complete'). */
+  pendingPostProcess(limit: number): Promise<RecordingRow[]>;
+  markPostProcessed(egressId: string, transcriptKey: string | null, thumbnailKey: string | null, summary: string | null): Promise<void>;
+  get sql(): Db;
+}
+
+export class PgRecordingStore implements RecordingStore {
+  constructor(private readonly db: Db) {}
+
+  get sql(): Db {
+    return this.db;
+  }
+
+  async started(egressId: string, spaceId: string, presenterId: string | null): Promise<void> {
+    await this.db`
+      INSERT INTO recordings (egress_id, space_id, presenter_id, status)
+      VALUES (${egressId}, ${spaceId}, ${presenterId}, 'recording')
+      ON CONFLICT (egress_id) DO UPDATE SET status = 'recording'
+    `;
+  }
+
+  async ended(
+    egressId: string,
+    status: string,
+    s3VideoKey: string | null,
+    durationMs: number | null,
+  ): Promise<void> {
+    await this.db`
+      UPDATE recordings
+      SET status = ${status}, s3_video_key = ${s3VideoKey}, duration_ms = ${durationMs}, ended_at = now()
+      WHERE egress_id = ${egressId}
+    `;
+  }
+
+  async pendingPostProcess(limit: number): Promise<RecordingRow[]> {
+    const rows = (await this.db`
+      SELECT egress_id, space_id, status, s3_video_key, duration_ms, started_at, ended_at
+      FROM recordings
+      WHERE status = 'complete'
+      ORDER BY ended_at ASC NULLS LAST
+      LIMIT ${limit}
+    `) as any[];
+    return rows.map((r) => ({
+      egressId: r.egress_id,
+      spaceId: r.space_id,
+      status: r.status,
+      s3VideoKey: r.s3_video_key,
+      durationMs: r.duration_ms ? Number(r.duration_ms) : null,
+      startedAt: new Date(r.started_at).getTime(),
+      endedAt: r.ended_at ? new Date(r.ended_at).getTime() : null,
+    }));
+  }
+
+  async markPostProcessed(
+    egressId: string,
+    transcriptKey: string | null,
+    thumbnailKey: string | null,
+    summary: string | null,
+  ): Promise<void> {
+    await this.db`
+      UPDATE recordings
+      SET status = 'processed', transcript_key = ${transcriptKey},
+          thumbnail_key = ${thumbnailKey}, summary = ${summary}
+      WHERE egress_id = ${egressId}
+    `;
+  }
+}
+
 /** Postgres-backed chat store. */
 export class PgChatStore implements ChatStore {
   constructor(private readonly sql: Db) {}

@@ -1,0 +1,12 @@
+{
+  "name": "@proximity/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "parabun src/index.ts"
+  },
+  "dependencies": {
+    "@proximity/config": "workspace:*"
+  }
+}

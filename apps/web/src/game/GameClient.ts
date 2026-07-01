@@ -1,8 +1,16 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { Facing, isBlocked, unpackCollision } from "@proximity/protocol";
-import { Connection, type Remote } from "../net/connection.ts";
+import { Connection, type PresentationState, type Remote } from "../net/connection.ts";
 import { Input } from "./input.ts";
 import { ProximityMedia } from "../media/ProximityMedia.ts";
+import { AnnotationOverlay } from "../media/AnnotationOverlay.ts";
+
+export interface PresentationUiState {
+  active: boolean;
+  isPresenter: boolean;
+  presenterName?: string;
+  recording?: boolean;
+}
 
 /** Render remotes this many ms in the past so we always interpolate between two known samples. */
 const INTERP_DELAY = 100;
@@ -51,10 +59,17 @@ export class GameClient {
   private localVideoEl: HTMLVideoElement | null = null;
   private readonly screenPos = new Map<string, { x: number; y: number }>();
 
+  // Presentation
+  private presenterId: string | null = null;
+  private annotation: AnnotationOverlay | null = null;
+  private stageEl: HTMLDivElement | null = null;
+  private stageVideoHolder: HTMLDivElement | null = null;
+
   onChat?: (name: string, body: string) => void;
   onChatHistory?: (messages: { name: string; body: string }[]) => void;
   onStatus?: (s: string) => void;
   onMedia?: (s: MediaState) => void;
+  onPresentation?: (s: PresentationUiState) => void;
   readonly displayName: string;
 
   constructor(url: string, name: string, avatarId: number) {
@@ -69,6 +84,25 @@ export class GameClient {
     this.conn.onChat = (n, b) => this.onChat?.(n, b);
     this.conn.onChatHistory = (msgs) => this.onChatHistory?.(msgs);
     this.conn.onStatus = (s) => this.onStatus?.(s);
+    this.conn.onPresentation = (state) => this.onPresentationState(state);
+    this.conn.onStroke = (d) => this.annotation?.applyDelta(d.strokeId, d.color, d.width, d.points);
+    this.conn.onStrokeSnapshot = (list) => this.annotation?.applySnapshot(list);
+    this.conn.onStrokeClear = () => this.annotation?.clear();
+  }
+
+  // --- Presentation controls (called from the UI) ---
+  startPresentation(record: boolean): void {
+    this.conn.sendPresentation("start", record);
+  }
+  stopPresentation(): void {
+    this.conn.sendPresentation("stop");
+  }
+  clearAnnotations(): void {
+    this.conn.sendStrokeClear();
+    this.annotation?.clear();
+  }
+  setAnnotationColor(color: string): void {
+    if (this.annotation) this.annotation.color = color;
   }
 
   async mount(parent: HTMLElement): Promise<void> {
@@ -126,6 +160,7 @@ export class GameClient {
   destroy(): void {
     void this.media?.disconnect();
     this.conn.close();
+    this.teardownStage();
     this.overlay?.remove();
     this.screenPanel?.remove();
     this.app.destroy(true, { children: true });
@@ -179,7 +214,10 @@ export class GameClient {
         existing.remove();
         this.screenEls.delete(peerId);
       }
-      if (el) {
+      if (!el) return;
+      if (peerId === this.presenterId && this.stageVideoHolder) {
+        this.placeStageVideo(el); // route the presenter's share to the big stage
+      } else {
         styleScreenShare(el);
         this.screenPanel?.appendChild(el);
         this.screenEls.set(peerId, el);
@@ -188,6 +226,92 @@ export class GameClient {
     media.onError = (err) => console.error("[proximity] media error:", err);
     this.conn.onProximity = (msg) => media.applyProximity(msg);
     void media.connect(lk.url, lk.token).then(() => this.onMedia?.(this.mediaState()));
+  }
+
+  private onPresentationState(state: PresentationState): void {
+    if (state.active && state.presenterId) {
+      this.presenterId = state.presenterId;
+      const isPresenter = state.presenterId === this.conn.selfId;
+      this.buildStage();
+      this.media?.setPresenter(state.presenterId);
+      this.annotation?.setEditable(isPresenter);
+      if (isPresenter) {
+        void this.media?.setScreen(true).then(() => this.onMedia?.(this.mediaState()));
+      }
+      // If the presenter's share was already showing in the proximity panel, move it to the stage.
+      const existing = this.screenEls.get(state.presenterId);
+      if (existing) {
+        this.screenEls.delete(state.presenterId);
+        this.placeStageVideo(existing);
+      }
+      this.onPresentation?.({
+        active: true,
+        isPresenter,
+        presenterName: state.presenterName,
+        recording: state.recording,
+      });
+    } else {
+      const wasPresenter = this.presenterId === this.conn.selfId;
+      this.presenterId = null;
+      this.media?.setPresenter(null);
+      if (wasPresenter && this.media?.screenEnabled) {
+        void this.media.setScreen(false).then(() => this.onMedia?.(this.mediaState()));
+      }
+      this.teardownStage();
+      this.onPresentation?.({ active: false, isPresenter: false });
+    }
+  }
+
+  private buildStage(): void {
+    if (this.stageEl || !this.parent) return;
+    const stage = document.createElement("div");
+    stage.style.cssText =
+      "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;" +
+      "z-index:4;pointer-events:none;padding:64px 16px;";
+    const holder = document.createElement("div");
+    holder.style.cssText =
+      "position:relative;width:min(72vw,1100px);aspect-ratio:16/9;background:#000;" +
+      "border-radius:12px;overflow:hidden;border:2px solid #eab308;pointer-events:auto;" +
+      "box-shadow:0 12px 50px rgba(0,0,0,0.7);";
+    const ann = new AnnotationOverlay();
+    ann.onStroke = (id, color, width, points, done) =>
+      this.conn.sendStroke(id, color, width, points, done);
+    holder.appendChild(ann.canvas);
+    stage.appendChild(holder);
+    this.parent.appendChild(stage);
+    this.stageEl = stage;
+    this.stageVideoHolder = holder;
+    this.annotation = ann;
+    window.addEventListener("resize", this.onStageResize);
+    requestAnimationFrame(() => ann.resize());
+  }
+
+  private placeStageVideo(el: HTMLVideoElement): void {
+    if (!this.stageVideoHolder) {
+      styleScreenShare(el);
+      this.screenPanel?.appendChild(el);
+      this.screenEls.set(el.id || "presenter", el);
+      return;
+    }
+    el.autoplay = true;
+    el.playsInline = true;
+    el.muted = true;
+    el.style.cssText = "position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;";
+    // Insert before the annotation canvas so the canvas stays on top.
+    this.stageVideoHolder.insertBefore(el, this.stageVideoHolder.firstChild);
+    el.addEventListener("loadedmetadata", () => this.annotation?.resize());
+    requestAnimationFrame(() => this.annotation?.resize());
+  }
+
+  private onStageResize = (): void => this.annotation?.resize();
+
+  private teardownStage(): void {
+    window.removeEventListener("resize", this.onStageResize);
+    this.annotation?.destroy();
+    this.annotation = null;
+    this.stageEl?.remove();
+    this.stageEl = null;
+    this.stageVideoHolder = null;
   }
 
   private drawMap(): void {

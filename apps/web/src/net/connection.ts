@@ -5,11 +5,28 @@ import {
   EntityFlags,
   type ClientMessage,
   type Facing,
+  type FullStroke,
   type MapDescriptor,
   type ProximityMessage,
   type ServerMessage,
   type SpaceConfig,
+  type StrokePoint,
 } from "@proximity/protocol";
+
+export interface PresentationState {
+  active: boolean;
+  presenterId?: string;
+  presenterName?: string;
+  recording?: boolean;
+}
+
+export interface StrokeDelta {
+  strokeId: string;
+  color: string;
+  width: number;
+  points: StrokePoint[];
+  done: boolean;
+}
 
 export interface RemoteSample {
   t: number; // client arrival time (performance.now)
@@ -57,6 +74,10 @@ export class Connection {
   onChatHistory?: (messages: { name: string; body: string }[]) => void;
   onStatus?: (s: ConnectionStatus) => void;
   onProximity?: (msg: ProximityMessage) => void;
+  onPresentation?: (state: PresentationState) => void;
+  onStroke?: (delta: StrokeDelta) => void;
+  onStrokeSnapshot?: (strokes: FullStroke[]) => void;
+  onStrokeClear?: () => void;
 
   private readonly ws: WebSocket;
   private seq = 0;
@@ -137,6 +158,29 @@ export class Connection {
       case "proximity":
         this.onProximity?.(m);
         break;
+      case "presentationState":
+        this.onPresentation?.({
+          active: m.active,
+          presenterId: m.presenterId,
+          presenterName: m.presenterName,
+          recording: m.recording,
+        });
+        break;
+      case "stroke":
+        this.onStroke?.({
+          strokeId: m.strokeId,
+          color: m.color,
+          width: m.width,
+          points: m.points,
+          done: m.done,
+        });
+        break;
+      case "strokeSnapshot":
+        this.onStrokeSnapshot?.(m.strokes);
+        break;
+      case "strokeClear":
+        this.onStrokeClear?.();
+        break;
       case "pong":
       case "error":
         break;
@@ -166,6 +210,24 @@ export class Connection {
 
   sendChat(body: string): void {
     this.send({ t: "chat", channel: "space", body });
+  }
+
+  sendPresentation(action: "start" | "stop", record = false): void {
+    this.send({ t: "presentation", action, record });
+  }
+
+  sendStroke(
+    strokeId: string,
+    color: string,
+    width: number,
+    points: StrokePoint[],
+    done: boolean,
+  ): void {
+    this.send({ t: "stroke", strokeId, color, width, points, done });
+  }
+
+  sendStrokeClear(): void {
+    this.send({ t: "strokeClear" });
   }
 
   close(): void {

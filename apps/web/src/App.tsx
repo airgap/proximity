@@ -1,5 +1,7 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
-import { GameClient, type MediaState } from "./game/GameClient.ts";
+import { GameClient, type MediaState, type PresentationUiState } from "./game/GameClient.ts";
+
+const ANNOTATION_COLORS = ["#ff3b30", "#ffd60a", "#34c759", "#0a84ff", "#ffffff"];
 
 function wsUrl(): string {
   const fromEnv = import.meta.env.VITE_WS_URL as string | undefined;
@@ -55,6 +57,8 @@ function Stage(props: { name: string }) {
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [draft, setDraft] = useState("");
   const [media, setMedia] = useState<MediaState | null>(null);
+  const [pres, setPres] = useState<PresentationUiState | null>(null);
+  const [record, setRecord] = useState(false);
   const chatId = useRef(0);
 
   useEffect(() => {
@@ -64,6 +68,7 @@ function Stage(props: { name: string }) {
     gameRef.current = game;
     game.onStatus = (s) => setStatus(s);
     game.onMedia = (s) => setMedia(s);
+    game.onPresentation = (s) => setPres(s);
     game.onChat = (n, b) =>
       setChat((prev) => [...prev.slice(-49), { name: n, body: b, id: chatId.current++ }]);
     game.onChatHistory = (msgs) =>
@@ -90,6 +95,12 @@ function Stage(props: { name: string }) {
     const s = await gameRef.current?.toggleScreen();
     if (s) setMedia(s);
   }, []);
+  const togglePresent = useCallback(() => {
+    const g = gameRef.current;
+    if (!g) return;
+    if (pres?.active && pres.isPresenter) g.stopPresentation();
+    else if (!pres?.active) g.startPresentation(record);
+  }, [pres, record]);
 
   const sendChat = useCallback(() => {
     const body = draft.trim();
@@ -130,6 +141,53 @@ function Stage(props: { name: string }) {
           >
             {media.screen ? "🖥️ Sharing" : "🖥️ Share"}
           </button>
+
+          {(!pres?.active || pres.isPresenter) && (
+            <button
+              style={{ ...styles.ctrlBtn, background: pres?.isPresenter ? "#dc2626" : "#33334d" }}
+              onClick={togglePresent}
+              title="Present to everyone in this space"
+            >
+              {pres?.isPresenter ? "⏹ Stop presenting" : "📊 Present"}
+            </button>
+          )}
+          {!pres?.active && (
+            <label style={styles.recordLabel}>
+              <input type="checkbox" checked={record} onChange={(e) => setRecord(e.target.checked)} />
+              rec
+            </label>
+          )}
+
+          {pres?.isPresenter && (
+            <>
+              {ANNOTATION_COLORS.map((c) => (
+                <button
+                  key={c}
+                  style={{ ...styles.swatch, background: c }}
+                  onClick={() => gameRef.current?.setAnnotationColor(c)}
+                  title={`Draw in ${c}`}
+                />
+              ))}
+              <button
+                style={{ ...styles.ctrlBtn, background: "#33334d" }}
+                onClick={() => gameRef.current?.clearAnnotations()}
+              >
+                🧹 Clear
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {pres?.active && !pres.isPresenter && (
+        <div style={styles.presBanner}>
+          📊 {pres.presenterName ?? "Someone"} is presenting
+          {pres.recording && <span style={styles.recDot}>● REC</span>}
+        </div>
+      )}
+      {pres?.isPresenter && pres.recording && (
+        <div style={styles.presBanner}>
+          <span style={styles.recDot}>● REC</span> You are presenting
         </div>
       )}
 
@@ -228,6 +286,42 @@ const styles: Record<string, CSSProperties> = {
     cursor: "pointer",
     backdropFilter: "blur(6px)",
   },
+  recordLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    color: "#9aa0b4",
+    fontSize: 12,
+    background: "rgba(18,18,30,0.7)",
+    padding: "6px 10px",
+    borderRadius: 999,
+  },
+  swatch: {
+    width: 24,
+    height: 24,
+    borderRadius: "50%",
+    border: "2px solid rgba(255,255,255,0.5)",
+    cursor: "pointer",
+    padding: 0,
+  },
+  presBanner: {
+    position: "absolute",
+    top: 12,
+    left: "50%",
+    transform: "translateX(-50%)",
+    background: "rgba(18,18,30,0.85)",
+    color: "#e5e7eb",
+    padding: "6px 14px",
+    borderRadius: 999,
+    fontSize: 13,
+    fontWeight: 600,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    zIndex: 6,
+    backdropFilter: "blur(6px)",
+  },
+  recDot: { color: "#f87171", fontSize: 12, fontWeight: 700 },
   chatPanel: {
     position: "absolute",
     bottom: 12,

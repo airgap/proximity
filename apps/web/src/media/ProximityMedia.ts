@@ -104,6 +104,17 @@ export class ProximityMedia {
     await this.room?.localParticipant.setCameraEnabled(on);
   }
 
+  /**
+   * Force-subscribe a presenter's screenshare regardless of proximity (presentation mode).
+   * Pass null to release; the peer then reverts to normal proximity gating (or drops when it
+   * next leaves range).
+   */
+  setPresenter(id: string | null): void {
+    if (!id) return;
+    if (!this.peers.has(id)) this.peers.set(id, { identity: id, gain: 0, wantVideo: false });
+    this.reconcileById(id);
+  }
+
   async setScreen(on: boolean): Promise<void> {
     try {
       await this.room?.localParticipant.setScreenShareEnabled(on);

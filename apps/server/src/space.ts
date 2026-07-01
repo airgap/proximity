@@ -8,13 +8,16 @@ import {
   isBlocked,
   unpackCollision,
   type ChatMessage,
+  type FullStroke,
   type MapDescriptor,
   type MoveMessage,
+  type PresentationControlMessage,
   type ProximityMessage,
   type ProximityPeer,
   type ServerMessage,
   type SnapshotEntity,
   type SpaceConfig,
+  type StrokeMessage,
 } from "@proximity/protocol";
 import { falloffGain, Grid } from "@proximity/spatial";
 import { generateDefaultMap } from "./map.ts";
@@ -71,6 +74,16 @@ export class Space {
   private nextNid = 1;
   private tick = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
+
+  /** Active presentation (space-wide screenshare elevation), or null. */
+  private presentation: {
+    presenterId: string;
+    presenterName: string;
+    recording: boolean;
+    egressId?: string;
+  } | null = null;
+  /** Current annotation strokes for the active presentation, keyed by strokeId. */
+  private readonly strokes = new Map<string, FullStroke>();
 
   /** Reused buffers to keep the broadcast hot path allocation-free. */
   private readonly snapshotScratch = new Uint8Array(64 * 1024);
@@ -168,12 +181,28 @@ export class Space {
       }
     }
 
+    // If a presentation is live, bring the newcomer up to date.
+    if (this.presentation && ws.data.client === client) {
+      send(ws, {
+        t: "presentationState",
+        active: true,
+        presenterId: this.presentation.presenterId,
+        presenterName: this.presentation.presenterName,
+        recording: this.presentation.recording,
+      });
+      if (this.strokes.size) {
+        send(ws, { t: "strokeSnapshot", strokes: [...this.strokes.values()] });
+      }
+    }
+
     // Immediately populate the newcomer's AOI so they see the room without a tick of latency.
     if (ws.data.client === client) this.syncClient(client);
     return client;
   }
 
   leave(client: ClientState): void {
+    // If the presenter drops, tear the presentation down for everyone.
+    if (this.presentation?.presenterId === client.id) void this.endPresentation();
     this.clients.delete(client.nid);
     this.grid.remove(client.nid);
     // Tell anyone who could see them.
@@ -244,6 +273,94 @@ export class Space {
     }
     // Persist for scrollback / compliance (fire-and-forget).
     this.chat?.append(this.id, client.id, client.name, channel, body);
+  }
+
+  // -------------------------------------------------------------------------
+  // Presentation mode + annotations (space-wide)
+  // -------------------------------------------------------------------------
+
+  onPresentation(client: ClientState, msg: PresentationControlMessage): void {
+    if (msg.action === "start") {
+      if (this.presentation) return; // one active presentation per space (MVP)
+      this.presentation = {
+        presenterId: client.id,
+        presenterName: client.name,
+        recording: !!msg.record,
+      };
+      this.broadcastAll({
+        t: "presentationState",
+        active: true,
+        presenterId: client.id,
+        presenterName: client.name,
+        recording: !!msg.record,
+      });
+      if (msg.record) void this.startRecording();
+    } else if (this.presentation?.presenterId === client.id) {
+      void this.endPresentation();
+    }
+  }
+
+  private async startRecording(): Promise<void> {
+    if (!this.presentation || !this.media?.canRecord) return;
+    try {
+      const egressId = await this.media.startEgress(
+        this.media.roomName(this.id),
+        this.id,
+        this.presentation.presenterId,
+      );
+      if (this.presentation) this.presentation.egressId = egressId;
+    } catch (err) {
+      console.error(`[proximity] egress start failed for ${this.id}:`, err);
+    }
+  }
+
+  private async endPresentation(): Promise<void> {
+    const p = this.presentation;
+    this.presentation = null;
+    this.strokes.clear();
+    this.broadcastAll({ t: "presentationState", active: false });
+    this.broadcastAll({ t: "strokeClear" });
+    if (p?.egressId && this.media?.canRecord) {
+      try {
+        await this.media.stopEgress(p.egressId);
+      } catch (err) {
+        console.error(`[proximity] egress stop failed for ${this.id}:`, err);
+      }
+    }
+  }
+
+  onStroke(client: ClientState, msg: StrokeMessage): void {
+    if (this.presentation?.presenterId !== client.id) return; // presenter annotates (MVP)
+    let s = this.strokes.get(msg.strokeId);
+    if (!s) {
+      if (this.strokes.size > 5000) return; // memory guard
+      s = { strokeId: msg.strokeId, color: msg.color, width: msg.width, points: [] };
+      this.strokes.set(msg.strokeId, s);
+    }
+    for (const p of msg.points) s.points.push(p);
+    this.broadcastAll(
+      {
+        t: "stroke",
+        strokeId: msg.strokeId,
+        color: msg.color,
+        width: msg.width,
+        points: msg.points,
+        done: msg.done,
+      },
+      client.nid,
+    );
+  }
+
+  onStrokeClear(client: ClientState): void {
+    if (this.presentation?.presenterId !== client.id) return;
+    this.strokes.clear();
+    this.broadcastAll({ t: "strokeClear" }, client.nid);
+  }
+
+  private broadcastAll(msg: ServerMessage, exceptNid?: number): void {
+    for (const c of this.clients.values()) {
+      if (c.nid !== exceptNid) send(c.ws, msg);
+    }
   }
 
   // -------------------------------------------------------------------------
