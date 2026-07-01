@@ -6,6 +6,7 @@ import { SpaceRegistry, type ProximitySocket, type WSData } from "./space.ts";
 import type { MediaProvider } from "./livekit.ts";
 import type { ChatStore, RecordingStore } from "./db.ts";
 import { grantAllowsSpace, OpenVerifier, tenantScopedKey, type GrantVerifier } from "./auth.ts";
+import type { HostHooks } from "./hosthooks.ts";
 
 export interface RunningServer {
   server: Server;
@@ -18,6 +19,21 @@ export interface ServerDeps {
   recordings?: RecordingStore | null;
   webhook?: WebhookReceiver | null;
   verifier?: GrantVerifier | null;
+  host?: HostHooks | null;
+  /** Comma-separated CORS allow-list ("*" for dev). */
+  corsOrigins?: string;
+}
+
+function corsHeaders(req: Request, allow: string): Record<string, string> {
+  const origin = req.headers.get("origin") ?? "";
+  const list = allow.split(",").map((s) => s.trim());
+  const ok = allow === "*" || list.includes(origin);
+  return {
+    "access-control-allow-origin": allow === "*" ? "*" : ok ? origin : "null",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "content-type, x-proximity-signature",
+    vary: "origin",
+  };
 }
 
 function wsError(ws: ProximitySocket, code: string, msg: string): void {
@@ -120,9 +136,10 @@ async function handleEgressWebhook(
 
 /** Start the world server. Pass PORT: 0 for an ephemeral port (tests). */
 export function startServer(env: Pick<ServerEnv, "HOST" | "PORT">, deps: ServerDeps = {}): RunningServer {
-  const registry = new SpaceRegistry(deps.media ?? null, deps.chat ?? null);
-  const { recordings = null, webhook = null } = deps;
+  const registry = new SpaceRegistry(deps.media ?? null, deps.chat ?? null, deps.host ?? null);
+  const { recordings = null, webhook = null, host = null } = deps;
   const verifier = deps.verifier ?? new OpenVerifier();
+  const cors = deps.corsOrigins ?? "*";
 
   const server = Bun.serve<WSData, {}>({
     hostname: env.HOST,
@@ -144,6 +161,36 @@ export function startServer(env: Pick<ServerEnv, "HOST" | "PORT">, deps: ServerD
         } catch (err) {
           console.error("[proximity] webhook error:", err);
           return new Response("bad webhook", { status: 400 });
+        }
+      }
+      // CORS preflight for the host-facing HTTP API.
+      if (req.method === "OPTIONS" && url.pathname.startsWith("/api/spaces/")) {
+        return new Response(null, { status: 204, headers: corsHeaders(req, cors) });
+      }
+      // Presence: GET /api/spaces/:id/presence -> { count }. Count-only, CORS-open so the host UI
+      // can poll a badge without a grant. (Full occupant list would require the grant.)
+      const presenceMatch = url.pathname.match(/^\/api\/spaces\/(.+)\/presence$/);
+      if (presenceMatch && req.method === "GET") {
+        const space = registry.get(decodeURIComponent(presenceMatch[1]!));
+        return Response.json(
+          { count: space?.population ?? 0 },
+          { headers: corsHeaders(req, cors) },
+        );
+      }
+      // Chat bridge inbound: POST /api/spaces/:id/chat (HMAC-signed by the host) -> inject.
+      const chatMatch = url.pathname.match(/^\/api\/spaces\/(.+)\/chat$/);
+      if (chatMatch && req.method === "POST") {
+        if (!host) return new Response("bridge not configured", { status: 501 });
+        const bodyText = await req.text();
+        if (!(await host.verify(bodyText, req.headers.get("x-proximity-signature")))) {
+          return new Response("bad signature", { status: 401, headers: corsHeaders(req, cors) });
+        }
+        try {
+          const { from, body } = JSON.parse(bodyText) as { from: { id: string; name: string }; body: string };
+          registry.get(decodeURIComponent(chatMatch[1]!))?.injectHostChat(from, body);
+          return new Response("ok", { headers: corsHeaders(req, cors) });
+        } catch {
+          return new Response("bad request", { status: 400, headers: corsHeaders(req, cors) });
         }
       }
       if (url.pathname === "/ws") {

@@ -33,15 +33,28 @@ const s3 = new S3Client({
   region: env.S3_REGION,
 });
 
-/** POST the generated note to the host's receiver (lyku channel bot, on-prem sink, …). */
+async function hmacHex(body: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)));
+  return [...sig].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** POST the generated note to the host's receiver (lyku channel bot, on-prem sink, …), signed. */
 async function postNote(payload: unknown): Promise<void> {
   if (!env.NOTETAKER_WEBHOOK_URL) return;
   try {
-    await fetch(env.NOTETAKER_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const body = JSON.stringify(payload);
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (env.PROXIMITY_GRANT_SECRET) {
+      headers["x-proximity-signature"] = await hmacHex(body, env.PROXIMITY_GRANT_SECRET);
+    }
+    await fetch(env.NOTETAKER_WEBHOOK_URL, { method: "POST", headers, body });
   } catch (err) {
     console.error("[worker] notetaker webhook failed:", err);
   }
@@ -50,12 +63,13 @@ async function postNote(payload: unknown): Promise<void> {
 interface Row {
   egress_id: string;
   space_id: string | null;
+  presenter_id: string | null;
   s3_video_key: string | null;
   duration_ms: string | number | null;
 }
 
 async function processOne(row: Row): Promise<void> {
-  const { egress_id, s3_video_key, space_id } = row;
+  const { egress_id, s3_video_key, space_id, presenter_id } = row;
   // Nothing to transcribe without a file or a model — mark processed so we don't spin on it.
   if (!s3_video_key || !env.WHISPER_MODEL) {
     await sql`UPDATE recordings SET status='processed' WHERE egress_id=${egress_id}`;
@@ -79,7 +93,7 @@ async function processOne(row: Row): Promise<void> {
       SET status='processed', transcript_key=${transcriptKey}, summary=${note.summary}
       WHERE egress_id=${egress_id}
     `;
-    await postNote({ egressId: egress_id, spaceId: space_id, note, transcriptKey, notesKey });
+    await postNote({ egressId: egress_id, spaceId: space_id, presenterId: presenter_id, note, transcriptKey, notesKey });
     console.log(
       `[worker] processed ${egress_id}: ${text.length} chars, ${note.actionItems.length} action item(s) [${note.engine}] -> ${notesKey}`,
     );
@@ -91,7 +105,7 @@ async function processOne(row: Row): Promise<void> {
 
 async function tick(): Promise<void> {
   const rows = (await sql`
-    SELECT egress_id, space_id, s3_video_key, duration_ms
+    SELECT egress_id, space_id, presenter_id, s3_video_key, duration_ms
     FROM recordings
     WHERE status='complete'
     ORDER BY ended_at ASC NULLS LAST

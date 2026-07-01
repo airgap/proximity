@@ -28,6 +28,10 @@ const ServerEnvSchema = z.object({
   // trusted_proxy  : identity from headers set by an authenticating reverse proxy / VPN portal
   PROXIMITY_AUTH_MODE: z.enum(["open", "shared_secret", "oidc", "trusted_proxy"]).default("open"),
   PROXIMITY_GRANT_SECRET: z.string().optional(),
+  /** Host webhook that receives in-world chat (chat bridge). Signed with the grant secret. */
+  HOST_CHAT_WEBHOOK_URL: z.string().optional(),
+  /** Comma-separated browser origins allowed for CORS (e.g. https://acme.lyku.co); "*" for dev. */
+  HOST_ORIGINS: z.string().default("*"),
   // oidc
   OIDC_ISSUER: z.string().optional(),
   OIDC_JWKS_URI: z.string().optional(),

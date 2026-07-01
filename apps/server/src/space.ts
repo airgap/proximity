@@ -24,6 +24,7 @@ import { falloffGain, Grid } from "@proximity/spatial";
 import { generateDefaultMap } from "./map.ts";
 import type { MediaProvider } from "./livekit.ts";
 import type { ChatStore } from "./db.ts";
+import type { HostHooks } from "./hosthooks.ts";
 
 /** Data attached to each WebSocket connection. */
 export interface WSData {
@@ -99,6 +100,7 @@ export class Space {
     id: string,
     private readonly media: MediaProvider | null = null,
     private readonly chat: ChatStore | null = null,
+    private readonly host: HostHooks | null = null,
   ) {
     this.id = id;
     this.map = generateDefaultMap();
@@ -288,6 +290,24 @@ export class Space {
     }
     // Persist for scrollback / compliance (fire-and-forget).
     this.chat?.append(this.id, client.id, client.name, channel, body);
+    // Chat bridge: forward this (world-origin) message to the host. Host-injected messages go
+    // through injectHostChat instead, which does NOT forward — so there is no loop.
+    this.host?.emitChat({ spaceId: this.id, from: { id: client.id, name: client.name }, body, origin: "world" });
+  }
+
+  /** Inject a message from the host (chat bridge inbound): broadcast to the space; do NOT re-forward. */
+  injectHostChat(from: { id: string; name: string }, body: string): void {
+    const text = body.slice(0, 2000);
+    if (!text) return;
+    const out: ServerMessage = {
+      t: "chat",
+      from: { nid: 0, id: from.id, name: from.name },
+      channel: "space",
+      body: text,
+      ts: Date.now(),
+    };
+    for (const c of this.clients.values()) send(c.ws, out);
+    this.chat?.append(this.id, from.id, from.name, "space", text);
   }
 
   // -------------------------------------------------------------------------
@@ -508,16 +528,22 @@ export class SpaceRegistry {
   constructor(
     private readonly media: MediaProvider | null = null,
     private readonly chat: ChatStore | null = null,
+    private readonly host: HostHooks | null = null,
   ) {}
 
   getOrCreate(id: string): Space {
     let s = this.spaces.get(id);
     if (!s) {
-      s = new Space(id, this.media, this.chat);
+      s = new Space(id, this.media, this.chat, this.host);
       s.start();
       this.spaces.set(id, s);
     }
     return s;
+  }
+
+  /** Look up a live space without creating one (for presence / chat-inject routes). */
+  get(id: string): Space | undefined {
+    return this.spaces.get(id);
   }
 
   get all(): IterableIterator<Space> {
