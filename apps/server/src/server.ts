@@ -3,6 +3,7 @@ import type { ServerEnv } from "@proximity/config";
 import { decodeClientJson, type ClientMessage } from "@proximity/protocol";
 import { SpaceRegistry, type ProximitySocket, type WSData } from "./space.ts";
 import type { MediaProvider } from "./livekit.ts";
+import type { ChatStore } from "./db.ts";
 
 export interface RunningServer {
   server: Server;
@@ -42,8 +43,9 @@ function handleMessage(ws: ProximitySocket, registry: SpaceRegistry, msg: Client
 export function startServer(
   env: Pick<ServerEnv, "HOST" | "PORT">,
   media: MediaProvider | null = null,
+  chat: ChatStore | null = null,
 ): RunningServer {
-  const registry = new SpaceRegistry(media);
+  const registry = new SpaceRegistry(media, chat);
 
   const server = Bun.serve<WSData, {}>({
     hostname: env.HOST,

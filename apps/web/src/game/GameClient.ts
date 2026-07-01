@@ -20,6 +20,7 @@ export interface MediaState {
   connected: boolean;
   mic: boolean;
   cam: boolean;
+  screen: boolean;
 }
 
 export class GameClient {
@@ -44,11 +45,14 @@ export class GameClient {
   private media: ProximityMedia | null = null;
   private parent: HTMLElement | null = null;
   private overlay: HTMLDivElement | null = null;
+  private screenPanel: HTMLDivElement | null = null;
   private readonly videoEls = new Map<string, HTMLVideoElement>();
+  private readonly screenEls = new Map<string, HTMLVideoElement>();
   private localVideoEl: HTMLVideoElement | null = null;
   private readonly screenPos = new Map<string, { x: number; y: number }>();
 
   onChat?: (name: string, body: string) => void;
+  onChatHistory?: (messages: { name: string; body: string }[]) => void;
   onStatus?: (s: string) => void;
   onMedia?: (s: MediaState) => void;
   readonly displayName: string;
@@ -63,6 +67,7 @@ export class GameClient {
       this.self.facing = f;
     };
     this.conn.onChat = (n, b) => this.onChat?.(n, b);
+    this.conn.onChatHistory = (msgs) => this.onChatHistory?.(msgs);
     this.conn.onStatus = (s) => this.onStatus?.(s);
   }
 
@@ -77,6 +82,14 @@ export class GameClient {
       "position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:2;";
     parent.appendChild(overlay);
     this.overlay = overlay;
+
+    // Fixed panel (top-center) for nearby screenshares.
+    const screenPanel = document.createElement("div");
+    screenPanel.style.cssText =
+      "position:absolute;top:52px;left:50%;transform:translateX(-50%);display:flex;gap:8px;" +
+      "z-index:3;pointer-events:none;max-width:96vw;flex-wrap:wrap;justify-content:center;";
+    parent.appendChild(screenPanel);
+    this.screenPanel = screenPanel;
 
     this.app.stage.addChild(this.world);
     this.app.ticker.add((ticker) => this.update(ticker.deltaMS));
@@ -96,11 +109,17 @@ export class GameClient {
     return this.mediaState();
   }
 
+  async toggleScreen(): Promise<MediaState> {
+    if (this.media) await this.media.setScreen(!this.media.screenEnabled);
+    return this.mediaState();
+  }
+
   private mediaState(): MediaState {
     return {
       connected: !!this.media,
       mic: this.media?.micEnabled ?? false,
       cam: this.media?.camEnabled ?? false,
+      screen: this.media?.screenEnabled ?? false,
     };
   }
 
@@ -108,6 +127,7 @@ export class GameClient {
     void this.media?.disconnect();
     this.conn.close();
     this.overlay?.remove();
+    this.screenPanel?.remove();
     this.app.destroy(true, { children: true });
   }
 
@@ -151,6 +171,18 @@ export class GameClient {
       if (el) {
         styleBubble(el, true);
         this.overlay?.appendChild(el);
+      }
+    };
+    media.onScreenShare = (peerId, el) => {
+      const existing = this.screenEls.get(peerId);
+      if (existing) {
+        existing.remove();
+        this.screenEls.delete(peerId);
+      }
+      if (el) {
+        styleScreenShare(el);
+        this.screenPanel?.appendChild(el);
+        this.screenEls.set(peerId, el);
       }
     };
     media.onError = (err) => console.error("[proximity] media error:", err);
@@ -305,6 +337,21 @@ function styleBubble(el: HTMLVideoElement, isLocal = false): void {
     `border:2px solid ${isLocal ? "#4ade80" : "#8ab4ff"}`,
     "transform:translate(-50%,-100%)",
     "box-shadow:0 6px 20px rgba(0,0,0,0.5)",
+    "background:#000",
+    "pointer-events:none",
+  ].join(";");
+}
+
+function styleScreenShare(el: HTMLVideoElement): void {
+  el.autoplay = true;
+  el.playsInline = true;
+  el.muted = true;
+  el.style.cssText = [
+    "width:min(46vw,640px)",
+    "height:auto",
+    "border-radius:10px",
+    "border:2px solid #facc15",
+    "box-shadow:0 8px 30px rgba(0,0,0,0.6)",
     "background:#000",
     "pointer-events:none",
   ].join(";");

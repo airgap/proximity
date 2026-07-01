@@ -17,6 +17,8 @@ interface PeerMedia {
   audioEl?: HTMLAudioElement;
   videoTrack?: RemoteVideoTrack;
   videoEl?: HTMLVideoElement;
+  screenTrack?: RemoteVideoTrack;
+  screenEl?: HTMLVideoElement;
 }
 
 /**
@@ -36,9 +38,12 @@ export class ProximityMedia {
 
   micEnabled = true;
   camEnabled = false;
+  screenEnabled = false;
 
-  /** Called when a peer's video element appears/disappears (null = removed). */
+  /** Called when a peer's camera video element appears/disappears (null = removed). */
   onVideo?: (peerId: string, el: HTMLVideoElement | null) => void;
+  /** Called when a peer's screenshare video element appears/disappears (null = removed). */
+  onScreenShare?: (peerId: string, el: HTMLVideoElement | null) => void;
   /** Called when the local camera preview element appears/disappears. */
   onLocalVideo?: (el: HTMLVideoElement | null) => void;
   onError?: (err: unknown) => void;
@@ -48,8 +53,8 @@ export class ProximityMedia {
     this.room = room;
 
     room
-      .on(RoomEvent.TrackSubscribed, (t, _pub, p) => this.onTrackSubscribed(t, p))
-      .on(RoomEvent.TrackUnsubscribed, (t, _pub, p) => this.onTrackUnsubscribed(t, p))
+      .on(RoomEvent.TrackSubscribed, (t, pub, p) => this.onTrackSubscribed(t, pub, p))
+      .on(RoomEvent.TrackUnsubscribed, (t, pub, p) => this.onTrackUnsubscribed(t, pub, p))
       .on(RoomEvent.ParticipantConnected, (p) => this.reconcileParticipant(p))
       .on(RoomEvent.TrackPublished, (_pub, p) => this.reconcileParticipant(p))
       .on(RoomEvent.LocalTrackPublished, (pub) => {
@@ -99,6 +104,17 @@ export class ProximityMedia {
     await this.room?.localParticipant.setCameraEnabled(on);
   }
 
+  async setScreen(on: boolean): Promise<void> {
+    try {
+      await this.room?.localParticipant.setScreenShareEnabled(on);
+      this.screenEnabled = on;
+    } catch (err) {
+      // User cancelled the picker, or capture failed.
+      this.screenEnabled = false;
+      this.onError?.(err);
+    }
+  }
+
   async disconnect(): Promise<void> {
     await this.room?.disconnect();
     this.room = null;
@@ -132,6 +148,7 @@ export class ProximityMedia {
     }
     peer.audioEl?.remove();
     if (peer.videoEl) this.onVideo?.(id, null);
+    if (peer.screenEl) this.onScreenShare?.(id, null);
     this.peers.delete(id);
   }
 
@@ -147,13 +164,19 @@ export class ProximityMedia {
     for (const pub of rp.trackPublications.values()) {
       if (pub.source === Track.Source.Microphone) pub.setSubscribed(true);
       else if (pub.source === Track.Source.Camera) pub.setSubscribed(peer.wantVideo);
+      else if (pub.source === Track.Source.ScreenShare) pub.setSubscribed(true); // always show shares
     }
   }
 
-  private onTrackSubscribed(track: RemoteTrack, participant: RemoteParticipant): void {
+  private onTrackSubscribed(
+    track: RemoteTrack,
+    pub: { source: Track.Source },
+    participant: RemoteParticipant,
+  ): void {
     const peer = this.peers.get(participant.identity);
     if (!peer) return;
     if (track instanceof RemoteAudioTrack) {
+      if (pub.source !== Track.Source.Microphone) return; // ignore screenshare audio for now
       peer.audioTrack = track;
       const el = track.attach() as HTMLAudioElement;
       el.style.display = "none";
@@ -161,14 +184,24 @@ export class ProximityMedia {
       peer.audioEl = el;
       track.setVolume(peer.gain); // distance-based volume
     } else if (track instanceof RemoteVideoTrack) {
-      peer.videoTrack = track;
       const el = track.attach() as HTMLVideoElement;
-      peer.videoEl = el;
-      this.onVideo?.(participant.identity, el);
+      if (pub.source === Track.Source.ScreenShare) {
+        peer.screenTrack = track;
+        peer.screenEl = el;
+        this.onScreenShare?.(participant.identity, el);
+      } else {
+        peer.videoTrack = track;
+        peer.videoEl = el;
+        this.onVideo?.(participant.identity, el);
+      }
     }
   }
 
-  private onTrackUnsubscribed(track: RemoteTrack, participant: RemoteParticipant): void {
+  private onTrackUnsubscribed(
+    track: RemoteTrack,
+    pub: { source: Track.Source },
+    participant: RemoteParticipant,
+  ): void {
     const peer = this.peers.get(participant.identity);
     if (!peer) return;
     track.detach();
@@ -176,7 +209,11 @@ export class ProximityMedia {
       peer.audioEl?.remove();
       peer.audioEl = undefined;
       peer.audioTrack = undefined;
-    } else if (track instanceof RemoteVideoTrack) {
+    } else if (pub.source === Track.Source.ScreenShare) {
+      peer.screenEl = undefined;
+      peer.screenTrack = undefined;
+      this.onScreenShare?.(participant.identity, null);
+    } else {
       peer.videoEl = undefined;
       peer.videoTrack = undefined;
       this.onVideo?.(participant.identity, null);

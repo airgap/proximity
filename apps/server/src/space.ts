@@ -19,6 +19,7 @@ import {
 import { falloffGain, Grid } from "@proximity/spatial";
 import { generateDefaultMap } from "./map.ts";
 import type { MediaProvider } from "./livekit.ts";
+import type { ChatStore } from "./db.ts";
 
 /** Data attached to each WebSocket connection. */
 export interface WSData {
@@ -78,6 +79,7 @@ export class Space {
   constructor(
     id: string,
     private readonly media: MediaProvider | null = null,
+    private readonly chat: ChatStore | null = null,
   ) {
     this.id = id;
     this.map = generateDefaultMap();
@@ -154,8 +156,20 @@ export class Space {
       livekit,
     });
 
+    // Send recent chat scrollback (if persisted).
+    if (this.chat) {
+      try {
+        const history = await this.chat.recent(this.id, 50);
+        if (history.length && ws.data.client === client) {
+          send(ws, { t: "chatHistory", messages: history });
+        }
+      } catch (err) {
+        console.error(`[proximity] chat history load failed for ${this.id}:`, err);
+      }
+    }
+
     // Immediately populate the newcomer's AOI so they see the room without a tick of latency.
-    this.syncClient(client);
+    if (ws.data.client === client) this.syncClient(client);
     return client;
   }
 
@@ -214,10 +228,11 @@ export class Space {
   onChat(client: ClientState, msg: ChatMessage): void {
     const body = msg.body.slice(0, 2000);
     if (!body) return;
+    const channel = msg.channel || "space";
     const out: ServerMessage = {
       t: "chat",
       from: { nid: client.nid, id: client.id, name: client.name },
-      channel: msg.channel,
+      channel,
       body,
       ts: Date.now(),
     };
@@ -227,6 +242,8 @@ export class Space {
       const other = this.clients.get(nid);
       if (other) send(other.ws, out);
     }
+    // Persist for scrollback / compliance (fire-and-forget).
+    this.chat?.append(this.id, client.id, client.name, channel, body);
   }
 
   // -------------------------------------------------------------------------
@@ -352,12 +369,15 @@ export class Space {
 export class SpaceRegistry {
   private readonly spaces = new Map<string, Space>();
 
-  constructor(private readonly media: MediaProvider | null = null) {}
+  constructor(
+    private readonly media: MediaProvider | null = null,
+    private readonly chat: ChatStore | null = null,
+  ) {}
 
   getOrCreate(id: string): Space {
     let s = this.spaces.get(id);
     if (!s) {
-      s = new Space(id, this.media);
+      s = new Space(id, this.media, this.chat);
       s.start();
       this.spaces.set(id, s);
     }

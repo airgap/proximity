@@ -170,6 +170,12 @@ export interface ChatBroadcast {
   ts: number;
 }
 
+/** Recent chat scrollback sent to a client on join. */
+export interface ChatHistoryMessage {
+  t: "chatHistory";
+  messages: { from: { id: string; name: string }; channel: string; body: string; ts: number }[];
+}
+
 /** Authoritative position snap when the server rejects a client move. */
 export interface CorrectionMessage {
   t: "correction";
@@ -215,6 +221,7 @@ export type ServerMessage =
   | EnterMessage
   | LeaveMessage
   | ChatBroadcast
+  | ChatHistoryMessage
   | CorrectionMessage
   | ProximityMessage
   | PongMessage

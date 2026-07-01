@@ -66,6 +66,11 @@ function Stage(props: { name: string }) {
     game.onMedia = (s) => setMedia(s);
     game.onChat = (n, b) =>
       setChat((prev) => [...prev.slice(-49), { name: n, body: b, id: chatId.current++ }]);
+    game.onChatHistory = (msgs) =>
+      setChat((prev) => [
+        ...msgs.map((m) => ({ name: m.name, body: m.body, id: chatId.current++ })),
+        ...prev,
+      ]);
     void game.mount(el);
     return () => {
       game.destroy();
@@ -79,6 +84,10 @@ function Stage(props: { name: string }) {
   }, []);
   const toggleCam = useCallback(async () => {
     const s = await gameRef.current?.toggleCam();
+    if (s) setMedia(s);
+  }, []);
+  const toggleScreen = useCallback(async () => {
+    const s = await gameRef.current?.toggleScreen();
     if (s) setMedia(s);
   }, []);
 
@@ -113,6 +122,13 @@ function Stage(props: { name: string }) {
             title="Toggle camera"
           >
             {media.cam ? "📷 Cam on" : "🚫 Cam off"}
+          </button>
+          <button
+            style={{ ...styles.ctrlBtn, background: media.screen ? "#eab308" : "#33334d" }}
+            onClick={toggleScreen}
+            title="Share your screen"
+          >
+            {media.screen ? "🖥️ Sharing" : "🖥️ Share"}
           </button>
         </div>
       )}

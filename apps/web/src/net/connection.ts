@@ -54,6 +54,7 @@ export class Connection {
   onWelcome?: () => void;
   onCorrection?: (x: number, y: number, facing: number) => void;
   onChat?: (name: string, body: string) => void;
+  onChatHistory?: (messages: { name: string; body: string }[]) => void;
   onStatus?: (s: ConnectionStatus) => void;
   onProximity?: (msg: ProximityMessage) => void;
 
@@ -126,6 +127,9 @@ export class Connection {
         break;
       case "chat":
         this.onChat?.(m.from.name, m.body);
+        break;
+      case "chatHistory":
+        this.onChatHistory?.(m.messages.map((x) => ({ name: x.from.name, body: x.body })));
         break;
       case "correction":
         this.onCorrection?.(m.x, m.y, m.facing);
