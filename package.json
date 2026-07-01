@@ -13,8 +13,8 @@
     "dev:server": "parabun --watch apps/server/src/index.ts",
     "dev:web": "parabun --filter @proximity/web dev",
     "loadgen": "parabun apps/loadgen/src/index.ts",
-    "infra:up": "docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.local.yml up",
-    "infra:down": "docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.local.yml down"
+    "infra:up": "docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.local.yml --profile storage up -d",
+    "infra:down": "docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.local.yml --profile storage down"
   },
   "devDependencies": {
     "typescript": "^5.7.0"

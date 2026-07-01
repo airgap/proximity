@@ -1,11 +1,9 @@
-// @ts-expect-error - parabun builtin module (no TS types)
-import audio from "parabun:audio";
-// @ts-expect-error - parabun builtin module (no TS types)
-import speech from "parabun:speech";
-
 /**
  * Recording post-processing DSP, built on Parabun's native audio/speech modules.
  * Verified against whisper.cpp's jfk.wav sample (see transcribe.test.ts).
+ *
+ * The parabun:* builtins are imported LAZILY so this module loads under standard Bun too
+ * (e.g. CI running `bun test`); only actually transcribing requires the Parabun runtime.
  */
 
 export interface AudioClip {
@@ -16,8 +14,28 @@ export interface AudioClip {
 
 const TARGET_RATE = 16000; // whisper wants 16 kHz mono
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+let _audio: any;
+let _speech: any;
+
+async function audioMod(): Promise<any> {
+  if (!_audio) {
+    const m = await import("parabun:audio");
+    _audio = (m as any).default ?? m;
+  }
+  return _audio;
+}
+async function speechMod(): Promise<any> {
+  if (!_speech) {
+    const m = await import("parabun:speech");
+    _speech = (m as any).default ?? m;
+  }
+  return _speech;
+}
+
 /** Decode WAV (fast path) or any media file's audio track to PCM samples. */
-export function decodeAudio(bytes: Uint8Array): AudioClip {
+export async function decodeAudio(bytes: Uint8Array): Promise<AudioClip> {
+  const audio = await audioMod();
   try {
     const w = audio.readWav(bytes);
     return { samples: w.samples, sampleRate: w.sampleRate, channels: w.channels };
@@ -27,23 +45,23 @@ export function decodeAudio(bytes: Uint8Array): AudioClip {
   }
 }
 
-/** Downmix to mono and resample to 16 kHz. */
-export function toMono16k(clip: AudioClip): Float32Array {
+/** Downmix to mono and resample to 16 kHz, normalized. */
+export async function toMono16k(clip: AudioClip): Promise<Float32Array> {
+  const audio = await audioMod();
   let mono = clip.samples;
   if (clip.channels > 1) {
     const chans = audio.deinterleave(clip.samples, clip.channels) as Float32Array[];
-    const n = chans[0].length;
+    const n = chans[0]!.length;
     mono = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       let s = 0;
-      for (let c = 0; c < clip.channels; c++) s += chans[c][i];
+      for (let c = 0; c < clip.channels; c++) s += chans[c]![i]!;
       mono[i] = s / clip.channels;
     }
   }
   if (clip.sampleRate !== TARGET_RATE) {
     mono = audio.resample(mono, { from: clip.sampleRate, to: TARGET_RATE });
   }
-  // Normalize levels for cleaner recognition.
   try {
     mono = audio.normalize(mono, { targetPeak: 0.95 }) ?? mono;
   } catch {
@@ -54,6 +72,7 @@ export function toMono16k(clip: AudioClip): Float32Array {
 
 /** Transcribe 16 kHz mono PCM to text using a whisper ggml model. */
 export async function transcribe(samples16k: Float32Array, modelPath: string): Promise<string> {
+  const speech = await speechMod();
   const out = await speech.transcribe(
     { samples: samples16k, sampleRate: TARGET_RATE },
     { engine: "whisper", model: modelPath },
@@ -63,7 +82,7 @@ export async function transcribe(samples16k: Float32Array, modelPath: string): P
 
 /** Full pipeline: audio bytes -> transcript text. */
 export async function transcribeRecording(bytes: Uint8Array, modelPath: string): Promise<string> {
-  return transcribe(toMono16k(decodeAudio(bytes)), modelPath);
+  return transcribe(await toMono16k(await decodeAudio(bytes)), modelPath);
 }
 
 function fmtTs(ms: number): string {

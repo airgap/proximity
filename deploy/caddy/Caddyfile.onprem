@@ -1,0 +1,15 @@
+# On-prem / air-gapped Caddyfile: no public ACME.
+# Default: Caddy's internal CA (distribute its root to clients via MDM/GPO).
+# For enterprise PKI certs instead, replace `tls internal` with:
+#     tls /certs/fullchain.pem /certs/privkey.pem
+# and mount them into the caddy container.
+{$PUBLIC_HOST} {
+	tls internal
+
+	@world path /ws /livekit/webhook
+	reverse_proxy @world world-server:8080
+
+	reverse_proxy /rtc* livekit:7880
+
+	reverse_proxy web:80
+}

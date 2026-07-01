@@ -11,8 +11,11 @@ services:
       - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
     restart: unless-stopped
 
+  # Self-hostable storage. Tagged `storage` so managed-service deploys (RDS/ElastiCache/S3,
+  # DO Managed DBs/Spaces) can skip these: run with `--profile storage` to include them.
   redis:
     image: redis:7-alpine
+    profiles: ["storage"]
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data
@@ -34,12 +37,12 @@ services:
       - SYS_ADMIN # required for the Chrome sandbox
     extra_hosts:
       - "host.docker.internal:host-gateway" # reach host-networked LiveKit + MinIO
-    depends_on:
-      - redis
+    # No hard depends_on: redis may be managed (ElastiCache/DO) and outside this compose.
     restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
+    profiles: ["storage"]
     environment:
       POSTGRES_USER: ${PG_USER:-proximity}
       POSTGRES_PASSWORD: ${PG_PASSWORD:-proximity_dev}
@@ -55,6 +58,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    profiles: ["storage"]
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}

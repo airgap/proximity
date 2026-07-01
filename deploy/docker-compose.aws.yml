@@ -1,0 +1,24 @@
+# AWS (pure) overrides. Same containers on EC2; managed backing services via .env.
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml -f docker-compose.aws.yml up -d
+#
+# Do NOT enable the `storage` profile — use RDS (Postgres), ElastiCache (Redis), S3.
+# Set in .env: PG_HOST=<rds>, REDIS_URL=redis://<elasticache>, S3_ENDPOINT= (empty for AWS S3),
+#   S3_FORCE_PATH_STYLE=false, LIVEKIT_URL=wss://media.<domain>, PUBLIC_HOST=<app domain>.
+# LOAD BALANCERS: ALB (WebSocket) -> caddy:443 for the app/WSS; a separate NLB (L4) must forward
+#   UDP 7882 + TCP 7881/5349 straight to the LiveKit instance (ALB cannot do UDP).
+services:
+  livekit:
+    volumes:
+      - ./livekit/livekit.prod.yaml:/etc/livekit.yaml:ro
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET}"
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+      - "5349:5349" # TURNS
+    restart: unless-stopped
+
+  egress:
+    volumes:
+      - ./livekit/egress.prod.yaml:/etc/egress.yaml:ro

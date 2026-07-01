@@ -1,0 +1,34 @@
+# On-prem / air-gapped overrides. Everything runs inside the perimeter; storage stays internal.
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml -f docker-compose.onprem.yml \
+#     --profile storage up -d
+#
+# - `storage` profile ON: Postgres + Redis + MinIO run locally; recordings never leave the enclave.
+# - TLS without public ACME: Caddy uses its internal CA (Caddyfile.onprem) — distribute its root
+#   via MDM/GPO — or mount enterprise PKI certs (see Caddyfile.onprem).
+# - Internal DNS must resolve PUBLIC_HOST and the media host directly to internal IPs; media/TURN
+#   reach LiveKit directly (no proxy hop). Set LIVEKIT_URL=wss://media.<internal>.
+# - Images: mirror all (incl. registry.digitalocean.com/parabun/parabun) into an internal registry
+#   or load the air-gap bundle (scripts/build-airgap-bundle.sh).
+services:
+  caddy:
+    volumes:
+      - ./caddy/Caddyfile.onprem:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      # - ./certs:/certs:ro   # uncomment if using enterprise PKI certs
+
+  livekit:
+    volumes:
+      - ./livekit/livekit.prod.yaml:/etc/livekit.yaml:ro
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-secret_devsecret_change_me_1234567890}"
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+      - "5349:5349"
+    restart: unless-stopped
+
+  egress:
+    volumes:
+      - ./livekit/egress.prod.yaml:/etc/egress.yaml:ro

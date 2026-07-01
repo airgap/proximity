@@ -1,0 +1,18 @@
+# Proximity reverse proxy (L7 + TLS). IMPORTANT: WebRTC MEDIA never goes through Caddy — the
+# browser reaches LiveKit/TURN directly on a public IP (see DEPLOY.md). Caddy handles only the
+# web app, the world-server WebSocket, and (optionally) LiveKit signaling.
+{
+	email {$ACME_EMAIL}
+}
+
+{$PUBLIC_HOST} {
+	# World-server: realtime WebSocket + egress webhook.
+	@world path /ws /livekit/webhook
+	reverse_proxy @world world-server:8080
+
+	# LiveKit signaling over WSS (optional through Caddy; media stays direct).
+	reverse_proxy /rtc* livekit:7880
+
+	# Static SPA.
+	reverse_proxy web:80
+}

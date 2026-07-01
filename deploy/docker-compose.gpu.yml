@@ -1,0 +1,29 @@
+# GPU overlay (opt-in, additive). Requires the NVIDIA driver + nvidia-container-toolkit on the host.
+# Parabun dlopen's CUDA lazily, so the SAME images run CPU-only without this file — just omit it.
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml -f docker-compose.gpu.yml up -d
+services:
+  # Accelerate whisper/LLM post-processing.
+  worker:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Accelerate recording transcode (NVENC).
+  egress:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video]

@@ -11,10 +11,10 @@ const canRun = Boolean(dir) && existsSync(wav) && existsSync(model);
 
 test.skipIf(!canRun)("transcribes jfk.wav through the Parabun whisper pipeline", async () => {
   const bytes = await Bun.file(wav).bytes();
-  const clip = decodeAudio(bytes);
+  const clip = await decodeAudio(bytes);
   expect(clip.sampleRate).toBeGreaterThan(0);
 
-  const mono = toMono16k(clip);
+  const mono = await toMono16k(clip);
   const text = await transcribe(mono, model);
   expect(text.toLowerCase()).toContain("country");
 

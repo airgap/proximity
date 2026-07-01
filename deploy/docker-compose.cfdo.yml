@@ -1,0 +1,29 @@
+# Cloudflare + DigitalOcean overrides ("lyku" infra).
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml -f docker-compose.cfdo.yml up -d
+#
+# Compute: DO Droplets. Storage: DO Spaces + DO Managed Postgres/Redis (no `storage` profile).
+# Set in .env: S3_ENDPOINT=https://<region>.digitaloceanspaces.com, S3_FORCE_PATH_STYLE=true,
+#   PG_HOST=<managed-pg>, REDIS_URL=redis://<managed-redis>, PUBLIC_HOST=<app domain>,
+#   LIVEKIT_URL=wss://media.<domain>.
+#
+# *** CRITICAL CLOUDFLARE GOTCHA ***
+# Cloudflare's proxy and Tunnel are HTTP(S)/WebSocket only and DO NOT carry WebRTC UDP media.
+#   - Proxy (orange-cloud) is fine for the web app + world-server WSS + LiveKit signaling.
+#   - The media host (LIVEKIT_URL / TURN) MUST be a DNS-only (grey-cloud) A record pointing at
+#     the media droplet's PUBLIC IP, terminating its own TLS. UDP Spectrum is Enterprise-only.
+services:
+  livekit:
+    volumes:
+      - ./livekit/livekit.prod.yaml:/etc/livekit.yaml:ro
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET}"
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+      - "5349:5349" # TURNS
+    restart: unless-stopped
+
+  egress:
+    volumes:
+      - ./livekit/egress.prod.yaml:/etc/egress.yaml:ro

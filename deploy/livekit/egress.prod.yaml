@@ -1,0 +1,8 @@
+# LiveKit Egress config for production (containers share one compose network).
+# For managed Redis, replace the address (or inject the whole config via EGRESS_CONFIG_BODY).
+redis:
+  address: redis:6379
+api_key: devkey
+api_secret: CHANGE_ME_generate_a_long_random_secret
+ws_url: ws://livekit:7880
+log_level: info

@@ -10,12 +10,20 @@ let chat: ChatStore | null = null;
 let recordings: RecordingStore | null = null;
 const db = dbFromEnv(env);
 if (db) {
-  try {
-    await migrate(db);
-    chat = new PgChatStore(db);
-    recordings = new PgRecordingStore(db);
-  } catch (err) {
-    console.error("[proximity] database init failed; continuing without persistence:", err);
+  // Retry briefly so we tolerate Postgres still starting (no hard depends_on across profiles).
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    try {
+      await migrate(db);
+      chat = new PgChatStore(db);
+      recordings = new PgRecordingStore(db);
+      break;
+    } catch (err) {
+      if (attempt === 10) {
+        console.error("[proximity] database init failed; continuing without persistence:", err);
+      } else {
+        await Bun.sleep(1000);
+      }
+    }
   }
 }
 
