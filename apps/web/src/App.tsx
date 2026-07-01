@@ -10,6 +10,15 @@ function wsUrl(): string {
   return `${proto}://${location.host}/ws`;
 }
 
+/** When embedded by a host (e.g. lyku), the grant token + space arrive via query params. */
+function hostContext(): { token?: string; space: string } {
+  const q = new URLSearchParams(location.search);
+  return {
+    token: q.get("token") ?? (import.meta.env.VITE_PROXIMITY_TOKEN as string | undefined),
+    space: q.get("space") ?? "default",
+  };
+}
+
 interface ChatLine {
   name: string;
   body: string;
@@ -64,7 +73,8 @@ function Stage(props: { name: string }) {
   useEffect(() => {
     const el = mountRef.current;
     if (!el) return;
-    const game = new GameClient(wsUrl(), props.name, 0);
+    const { token, space } = hostContext();
+    const game = new GameClient(wsUrl(), props.name, 0, space, token);
     gameRef.current = game;
     game.onStatus = (s) => setStatus(s);
     game.onMedia = (s) => setMedia(s);

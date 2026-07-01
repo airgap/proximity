@@ -5,6 +5,7 @@ import { decodeClientJson, type ClientMessage } from "@proximity/protocol";
 import { SpaceRegistry, type ProximitySocket, type WSData } from "./space.ts";
 import type { MediaProvider } from "./livekit.ts";
 import type { ChatStore, RecordingStore } from "./db.ts";
+import { grantAllowsSpace, OpenVerifier, tenantScopedKey, type GrantVerifier } from "./auth.ts";
 
 export interface RunningServer {
   server: Server;
@@ -16,21 +17,59 @@ export interface ServerDeps {
   chat?: ChatStore | null;
   recordings?: RecordingStore | null;
   webhook?: WebhookReceiver | null;
+  verifier?: GrantVerifier | null;
 }
 
-function handleMessage(ws: ProximitySocket, registry: SpaceRegistry, msg: ClientMessage): void {
-  // The first message must be `join`; everything else requires an established client.
+function wsError(ws: ProximitySocket, code: string, msg: string): void {
+  ws.send(JSON.stringify({ t: "error", code, msg }));
+}
+
+async function handleJoin(
+  ws: ProximitySocket,
+  registry: SpaceRegistry,
+  verifier: GrantVerifier,
+  msg: Extract<ClientMessage, { t: "join" }>,
+): Promise<void> {
+  if (ws.data.client) return; // already joined
+
+  // Resolve a grant: from the upgrade request (trusted_proxy / bearer), then the join token,
+  // then anonymous (open mode only).
+  let grant =
+    ws.data.pendingGrant ??
+    (msg.token ? await verifier.fromToken(msg.token) : null) ??
+    verifier.anonymous(msg.name);
+
+  if (ws.data.client) return; // raced with another join while awaiting
+
+  if (!grant) {
+    wsError(ws, "unauthorized", "a valid access grant is required to join");
+    ws.close(4401, "unauthorized");
+    return;
+  }
+  if (!grantAllowsSpace(grant, msg.spaceId)) {
+    wsError(ws, "forbidden", `not authorized for space ${msg.spaceId}`);
+    ws.close(4403, "forbidden");
+    return;
+  }
+
+  const space = registry.getOrCreate(tenantScopedKey(grant, msg.spaceId));
+  void space.join(ws, grant, msg.avatarId, msg.observer ?? false);
+}
+
+function handleMessage(
+  ws: ProximitySocket,
+  registry: SpaceRegistry,
+  verifier: GrantVerifier,
+  msg: ClientMessage,
+): void {
   if (msg.t === "join") {
-    if (ws.data.client) return; // already joined
-    const space = registry.getOrCreate(msg.spaceId || "default");
-    // join is async (mints a LiveKit token); fire-and-forget, welcome is sent when ready.
-    void space.join(ws, msg.name, msg.avatarId, msg.observer ?? false);
+    void handleJoin(ws, registry, verifier, msg);
     return;
   }
 
   const client = ws.data.client;
   if (!client) {
-    ws.send(JSON.stringify({ t: "error", code: "not_joined", msg: "send a join message first" }));
+    wsError(ws, "not_joined", "send a join message first");
     return;
   }
 
@@ -68,13 +107,12 @@ async function handleEgressWebhook(
   if (event.event === "egress_started") {
     await recordings.started(info.egressId, spaceId, null);
   } else if (event.event === "egress_ended" || event.event === "egress_updated") {
-    // Only finalize on a terminal status.
     const status: string = String(info.status ?? "");
     const terminal = /COMPLETE|FAILED|ABORTED/i.test(status) || event.event === "egress_ended";
     if (!terminal) return;
     const file = info.fileResults?.[0] ?? info.file;
     const key: string | null = file?.filename ?? file?.location ?? null;
-    const durationMs = file?.duration ? Math.round(Number(file.duration) / 1e6) : null; // ns -> ms
+    const durationMs = file?.duration ? Math.round(Number(file.duration) / 1e6) : null;
     const outStatus = /FAILED|ABORTED/i.test(status) ? "failed" : "complete";
     await recordings.ended(info.egressId, outStatus, key, durationMs);
   }
@@ -84,6 +122,7 @@ async function handleEgressWebhook(
 export function startServer(env: Pick<ServerEnv, "HOST" | "PORT">, deps: ServerDeps = {}): RunningServer {
   const registry = new SpaceRegistry(deps.media ?? null, deps.chat ?? null);
   const { recordings = null, webhook = null } = deps;
+  const verifier = deps.verifier ?? new OpenVerifier();
 
   const server = Bun.serve<WSData, {}>({
     hostname: env.HOST,
@@ -95,7 +134,6 @@ export function startServer(env: Pick<ServerEnv, "HOST" | "PORT">, deps: ServerD
       if (url.pathname === "/healthz") {
         return new Response("ok", { headers: { "content-type": "text/plain" } });
       }
-      // LiveKit egress webhook (signed). Persists recording lifecycle.
       if (url.pathname === "/livekit/webhook" && req.method === "POST") {
         if (!webhook || !recordings) return new Response("recording not configured", { status: 501 });
         try {
@@ -109,7 +147,9 @@ export function startServer(env: Pick<ServerEnv, "HOST" | "PORT">, deps: ServerD
         }
       }
       if (url.pathname === "/ws") {
-        if (server.upgrade(req, { data: { client: null } })) return undefined;
+        // Resolve any request-level grant (trusted_proxy headers / bearer) before upgrading.
+        const pendingGrant = await verifier.fromRequest(req);
+        if (server.upgrade(req, { data: { client: null, pendingGrant } })) return undefined;
         return new Response("expected a websocket upgrade", { status: 426 });
       }
       return new Response("proximity world-server", { status: 200 });
@@ -129,7 +169,7 @@ export function startServer(env: Pick<ServerEnv, "HOST" | "PORT">, deps: ServerD
         } catch {
           return;
         }
-        handleMessage(ws, registry, msg);
+        handleMessage(ws, registry, verifier, msg);
       },
       close(ws) {
         const client = ws.data.client;

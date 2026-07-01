@@ -12,6 +12,7 @@ import {
   type MapDescriptor,
   type MoveMessage,
   type PresentationControlMessage,
+  type ProximityGrant,
   type ProximityMessage,
   type ProximityPeer,
   type ServerMessage,
@@ -27,6 +28,8 @@ import type { ChatStore } from "./db.ts";
 /** Data attached to each WebSocket connection. */
 export interface WSData {
   client: ClientState | null;
+  /** Grant resolved from the HTTP upgrade request (trusted_proxy / bearer), if any. */
+  pendingGrant: ProximityGrant | null;
 }
 
 export type ProximitySocket = ServerWebSocket<WSData>;
@@ -40,6 +43,8 @@ export interface ClientState {
   ws: ProximitySocket;
   space: Space;
   observer: boolean;
+  /** Capabilities from the access grant (present/record/annotate). */
+  caps: Set<string>;
 
   x: number;
   y: number;
@@ -122,7 +127,7 @@ export class Space {
 
   async join(
     ws: ProximitySocket,
-    name: string,
+    grant: ProximityGrant,
     avatarId: number,
     observer = false,
   ): Promise<ClientState> {
@@ -130,12 +135,13 @@ export class Space {
     const spawn = this.map.spawn;
     const client: ClientState = {
       nid,
-      id: `u_${nid}`,
-      name: name.slice(0, 40) || `Guest ${nid}`,
+      id: grant.sub, // authoritative identity from the grant (== LiveKit identity)
+      name: (grant.name || `Guest ${nid}`).slice(0, 40),
       avatarId: avatarId | 0,
       ws,
       space: this,
       observer,
+      caps: new Set(grant.caps),
       x: spawn.x,
       y: spawn.y,
       facing: Facing.Down,
@@ -290,20 +296,23 @@ export class Space {
 
   onPresentation(client: ClientState, msg: PresentationControlMessage): void {
     if (msg.action === "start") {
+      if (!client.caps.has("present")) return; // not authorized to present
       if (this.presentation) return; // one active presentation per space (MVP)
       this.presentation = {
         presenterId: client.id,
         presenterName: client.name,
         recording: !!msg.record,
       };
+      const recording = !!msg.record && client.caps.has("record");
+      this.presentation.recording = recording;
       this.broadcastAll({
         t: "presentationState",
         active: true,
         presenterId: client.id,
         presenterName: client.name,
-        recording: !!msg.record,
+        recording,
       });
-      if (msg.record) void this.startRecording();
+      if (recording) void this.startRecording();
     } else if (this.presentation?.presenterId === client.id) {
       void this.endPresentation();
     }
@@ -340,6 +349,7 @@ export class Space {
 
   onStroke(client: ClientState, msg: StrokeMessage): void {
     if (this.presentation?.presenterId !== client.id) return; // presenter annotates (MVP)
+    if (!client.caps.has("annotate")) return;
     let s = this.strokes.get(msg.strokeId);
     if (!s) {
       if (this.strokes.size > 5000) return; // memory guard

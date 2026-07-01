@@ -57,6 +57,34 @@ export interface Rect {
   h: number;
 }
 
+// ---------------------------------------------------------------------------
+// Access grant — the bolt-on authorization contract
+// ---------------------------------------------------------------------------
+
+/** Capabilities a grant may confer. */
+export const GRANT_CAPS = ["join", "present", "record", "annotate"] as const;
+export type GrantCap = (typeof GRANT_CAPS)[number];
+
+/**
+ * The signed authorization Proximity trusts. Minted by the HOST authority (lyku, or an on-prem
+ * IdP adapter) after it decides entitlement — Proximity never owns identity, groups, or billing;
+ * it only verifies and enforces this. `sub` becomes BOTH the world userId and the LiveKit identity.
+ */
+export interface ProximityGrant {
+  /** Stable user id. Becomes the world userId and LiveKit identity. */
+  sub: string;
+  /** Display name. */
+  name: string;
+  /** Tenant/org key for multi-tenant deployments (spaces are scoped under it). Omit for single-tenant. */
+  tenant?: string;
+  /** Space ids this user may join (e.g. "group:eng", "world:abc"), or ["*"] for any. */
+  spaces: string[];
+  /** Granted capabilities (subset of GRANT_CAPS). */
+  caps: GrantCap[];
+  /** Expiry (unix seconds); enforced by the verifier. */
+  exp?: number;
+}
+
 /** Static map description sent in `welcome`. MVP loads this from the space record. */
 export interface MapDescriptor {
   name: string;

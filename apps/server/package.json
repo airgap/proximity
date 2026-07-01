@@ -12,6 +12,7 @@
     "@proximity/config": "workspace:*",
     "@proximity/protocol": "workspace:*",
     "@proximity/spatial": "workspace:*",
+    "jose": "^5.9.0",
     "livekit-server-sdk": "^2.9.0"
   }
 }

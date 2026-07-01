@@ -21,6 +21,25 @@ const ServerEnvSchema = z.object({
   /** Comma-free public origin allowed for browser CORS/WS (dev default permits localhost). */
   PUBLIC_WEB_ORIGIN: z.string().default("http://localhost:5173"),
 
+  // --- Bolt-on authorization: how join grants are verified ---
+  // open           : dev; anyone joins any space (no grant)
+  // shared_secret  : HS256 grant JWT minted by the host (e.g. lyku); verify with PROXIMITY_GRANT_SECRET
+  // oidc           : verify the company IdP's JWT via JWKS
+  // trusted_proxy  : identity from headers set by an authenticating reverse proxy / VPN portal
+  PROXIMITY_AUTH_MODE: z.enum(["open", "shared_secret", "oidc", "trusted_proxy"]).default("open"),
+  PROXIMITY_GRANT_SECRET: z.string().optional(),
+  // oidc
+  OIDC_ISSUER: z.string().optional(),
+  OIDC_JWKS_URI: z.string().optional(),
+  OIDC_AUDIENCE: z.string().optional(),
+  OIDC_SPACES_CLAIM: z.string().optional(), // claim holding joinable space ids; default ["*"]
+  OIDC_TENANT_CLAIM: z.string().optional(),
+  // trusted_proxy (header names)
+  TRUSTED_PROXY_USER_HEADER: z.string().default("x-forwarded-user"),
+  TRUSTED_PROXY_NAME_HEADER: z.string().default("x-forwarded-name"),
+  TRUSTED_PROXY_SPACES_HEADER: z.string().default("x-forwarded-spaces"),
+  TRUSTED_PROXY_TENANT_HEADER: z.string().default("x-forwarded-tenant"),
+
   // Redis (presence/pubsub + multi-node). Optional: single-node skeleton runs without it.
   REDIS_URL: z.string().optional(),
 
