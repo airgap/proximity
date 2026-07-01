@@ -79,6 +79,8 @@ const ServerEnvSchema = z.object({
   LLM_MODEL: z.string().optional(),
   /** How often the worker polls for recordings to process, ms. */
   WORKER_POLL_MS: z.coerce.number().int().positive().default(5000),
+  /** Where the notetaker POSTs the generated meeting note (host implements the receiver). */
+  NOTETAKER_WEBHOOK_URL: z.string().optional(),
 });
 
 export type ServerEnv = z.infer<typeof ServerEnvSchema>;
