@@ -1,0 +1,25 @@
+{
+  "name": "proximity",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -b --pretty",
+    "test": "parabun test",
+    "dev:server": "parabun --watch apps/server/src/index.ts",
+    "dev:web": "parabun --filter @proximity/web dev",
+    "loadgen": "parabun apps/loadgen/src/index.ts",
+    "infra:up": "docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.local.yml up",
+    "infra:down": "docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.local.yml down"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  }
+}

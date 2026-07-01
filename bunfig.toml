@@ -1,0 +1,8 @@
+# Parabun / Bun workspace config
+[install]
+# Keep the lockfile deterministic across dev + CI + air-gap builds.
+exact = false
+
+[test]
+# Co-located *.test.ts files, plus package test dirs.
+root = "."

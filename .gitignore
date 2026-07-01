@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!deploy/**/*.example
+
+# Logs & runtime
+*.log
+.DS_Store
+coverage/
+
+# Local data (docker volumes bind-mounted for dev)
+deploy/.data/
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
