@@ -1,6 +1,7 @@
 import { S3Client, SQL } from "bun";
 import { loadServerEnv } from "@proximity/config";
 import { toVtt, transcribeRecording } from "./transcribe.ts";
+import { generateNote, noteToMarkdown } from "./notetaker.ts";
 
 /**
  * Recording post-processing worker.
@@ -32,35 +33,29 @@ const s3 = new S3Client({
   region: env.S3_REGION,
 });
 
-async function summarize(text: string): Promise<string | null> {
-  if (!env.LLM_MODEL) return null;
+/** POST the generated note to the host's receiver (lyku channel bot, on-prem sink, …). */
+async function postNote(payload: unknown): Promise<void> {
+  if (!env.NOTETAKER_WEBHOOK_URL) return;
   try {
-    // @ts-expect-error - parabun builtin module (no TS types)
-    const llm = (await import("parabun:llm")).default;
-    const model = await llm.LLM.load(env.LLM_MODEL);
-    let out = "";
-    for await (const piece of model.chat([
-      {
-        role: "user",
-        content: `Summarize this meeting transcript in 3 concise bullet points:\n\n${text.slice(0, 6000)}`,
-      },
-    ])) {
-      out += piece;
-    }
-    (model.close ?? model[Symbol.dispose])?.call(model);
-    return out.trim() || null;
+    await fetch(env.NOTETAKER_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   } catch (err) {
-    console.error("[worker] summary failed:", err);
-    return null;
+    console.error("[worker] notetaker webhook failed:", err);
   }
 }
 
-async function processOne(row: {
+interface Row {
   egress_id: string;
+  space_id: string | null;
   s3_video_key: string | null;
   duration_ms: string | number | null;
-}): Promise<void> {
-  const { egress_id, s3_video_key } = row;
+}
+
+async function processOne(row: Row): Promise<void> {
+  const { egress_id, s3_video_key, space_id } = row;
   // Nothing to transcribe without a file or a model — mark processed so we don't spin on it.
   if (!s3_video_key || !env.WHISPER_MODEL) {
     await sql`UPDATE recordings SET status='processed' WHERE egress_id=${egress_id}`;
@@ -69,18 +64,25 @@ async function processOne(row: {
   try {
     const bytes = new Uint8Array(await s3.file(s3_video_key).arrayBuffer());
     const text = await transcribeRecording(bytes, env.WHISPER_MODEL);
-    const vtt = toVtt(text, Number(row.duration_ms ?? 0));
-    const transcriptKey = s3_video_key.replace(/\.[^.]+$/, "") + ".vtt";
-    await s3.write(transcriptKey, vtt);
+    const base = s3_video_key.replace(/\.[^.]+$/, "");
 
-    const summary = await summarize(text);
+    const transcriptKey = `${base}.vtt`;
+    await s3.write(transcriptKey, toVtt(text, Number(row.duration_ms ?? 0)));
+
+    // Notetaker: structured note (LLM if configured, else extractive) -> markdown artifact.
+    const note = await generateNote(text, { llmModel: env.LLM_MODEL });
+    const notesKey = `${base}.notes.md`;
+    await s3.write(notesKey, noteToMarkdown(note, { spaceId: space_id ?? undefined, transcriptRef: transcriptKey }));
 
     await sql`
       UPDATE recordings
-      SET status='processed', transcript_key=${transcriptKey}, summary=${summary}
+      SET status='processed', transcript_key=${transcriptKey}, summary=${note.summary}
       WHERE egress_id=${egress_id}
     `;
-    console.log(`[worker] processed ${egress_id}: ${text.length} chars -> ${transcriptKey}`);
+    await postNote({ egressId: egress_id, spaceId: space_id, note, transcriptKey, notesKey });
+    console.log(
+      `[worker] processed ${egress_id}: ${text.length} chars, ${note.actionItems.length} action item(s) [${note.engine}] -> ${notesKey}`,
+    );
   } catch (err) {
     console.error(`[worker] failed ${egress_id}:`, err);
     await sql`UPDATE recordings SET status='process_failed' WHERE egress_id=${egress_id}`;
@@ -89,19 +91,19 @@ async function processOne(row: {
 
 async function tick(): Promise<void> {
   const rows = (await sql`
-    SELECT egress_id, s3_video_key, duration_ms
+    SELECT egress_id, space_id, s3_video_key, duration_ms
     FROM recordings
     WHERE status='complete'
     ORDER BY ended_at ASC NULLS LAST
     LIMIT 3
-  `) as { egress_id: string; s3_video_key: string | null; duration_ms: string | number | null }[];
+  `) as Row[];
   for (const row of rows) await processOne(row);
 }
 
 console.log(
   `[worker] recording post-processor started` +
     (env.WHISPER_MODEL ? ` (whisper: ${env.WHISPER_MODEL})` : " (no whisper model; transcription disabled)") +
-    (env.LLM_MODEL ? " (+summary)" : ""),
+    ` (notetaker: ${env.LLM_MODEL ? "llm" : "extractive"}${env.NOTETAKER_WEBHOOK_URL ? " ->webhook" : ""})`,
 );
 await tick();
 setInterval(() => void tick(), env.WORKER_POLL_MS);
