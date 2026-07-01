@@ -1,5 +1,5 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
-import { GameClient } from "./game/GameClient.ts";
+import { GameClient, type MediaState } from "./game/GameClient.ts";
 
 function wsUrl(): string {
   const fromEnv = import.meta.env.VITE_WS_URL as string | undefined;
@@ -54,6 +54,7 @@ function Stage(props: { name: string }) {
   const [status, setStatus] = useState("connecting");
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [draft, setDraft] = useState("");
+  const [media, setMedia] = useState<MediaState | null>(null);
   const chatId = useRef(0);
 
   useEffect(() => {
@@ -62,6 +63,7 @@ function Stage(props: { name: string }) {
     const game = new GameClient(wsUrl(), props.name, 0);
     gameRef.current = game;
     game.onStatus = (s) => setStatus(s);
+    game.onMedia = (s) => setMedia(s);
     game.onChat = (n, b) =>
       setChat((prev) => [...prev.slice(-49), { name: n, body: b, id: chatId.current++ }]);
     void game.mount(el);
@@ -70,6 +72,15 @@ function Stage(props: { name: string }) {
       gameRef.current = null;
     };
   }, [props.name]);
+
+  const toggleMic = useCallback(async () => {
+    const s = await gameRef.current?.toggleMic();
+    if (s) setMedia(s);
+  }, []);
+  const toggleCam = useCallback(async () => {
+    const s = await gameRef.current?.toggleCam();
+    if (s) setMedia(s);
+  }, []);
 
   const sendChat = useCallback(() => {
     const body = draft.trim();
@@ -86,6 +97,25 @@ function Stage(props: { name: string }) {
         <span style={{ ...styles.dot, background: statusColor(status) }} /> {status}
         <span style={{ color: "#6b7089", marginLeft: 10 }}>WASD / arrows to move</span>
       </div>
+
+      {media?.connected && (
+        <div style={styles.controls}>
+          <button
+            style={{ ...styles.ctrlBtn, background: media.mic ? "#4f46e5" : "#33334d" }}
+            onClick={toggleMic}
+            title="Toggle microphone"
+          >
+            {media.mic ? "🎤 Mic on" : "🔇 Mic off"}
+          </button>
+          <button
+            style={{ ...styles.ctrlBtn, background: media.cam ? "#4f46e5" : "#33334d" }}
+            onClick={toggleCam}
+            title="Toggle camera"
+          >
+            {media.cam ? "📷 Cam on" : "🚫 Cam off"}
+          </button>
+        </div>
+      )}
 
       <div style={styles.chatPanel}>
         <div style={styles.chatLog}>
@@ -163,6 +193,25 @@ const styles: Record<string, CSSProperties> = {
     backdropFilter: "blur(6px)",
   },
   dot: { width: 8, height: 8, borderRadius: "50%", display: "inline-block" },
+  controls: {
+    position: "absolute",
+    bottom: 16,
+    left: "50%",
+    transform: "translateX(-50%)",
+    display: "flex",
+    gap: 8,
+    zIndex: 5,
+  },
+  ctrlBtn: {
+    padding: "8px 14px",
+    borderRadius: 999,
+    border: "none",
+    color: "white",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    backdropFilter: "blur(6px)",
+  },
   chatPanel: {
     position: "absolute",
     bottom: 12,

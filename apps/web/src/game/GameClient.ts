@@ -2,6 +2,7 @@ import { Application, Container, Graphics, Text } from "pixi.js";
 import { Facing, isBlocked, unpackCollision } from "@proximity/protocol";
 import { Connection, type Remote } from "../net/connection.ts";
 import { Input } from "./input.ts";
+import { ProximityMedia } from "../media/ProximityMedia.ts";
 
 /** Render remotes this many ms in the past so we always interpolate between two known samples. */
 const INTERP_DELAY = 100;
@@ -13,6 +14,12 @@ const BODY_RADIUS = 0.35;
 interface AvatarView {
   container: Container;
   label: Text;
+}
+
+export interface MediaState {
+  connected: boolean;
+  mic: boolean;
+  cam: boolean;
 }
 
 export class GameClient {
@@ -33,8 +40,17 @@ export class GameClient {
   private lastSendAt = 0;
   private lastSent = { x: 0, y: 0, facing: 0, moving: false };
 
+  // Media
+  private media: ProximityMedia | null = null;
+  private parent: HTMLElement | null = null;
+  private overlay: HTMLDivElement | null = null;
+  private readonly videoEls = new Map<string, HTMLVideoElement>();
+  private localVideoEl: HTMLVideoElement | null = null;
+  private readonly screenPos = new Map<string, { x: number; y: number }>();
+
   onChat?: (name: string, body: string) => void;
   onStatus?: (s: string) => void;
+  onMedia?: (s: MediaState) => void;
   readonly displayName: string;
 
   constructor(url: string, name: string, avatarId: number) {
@@ -51,8 +67,17 @@ export class GameClient {
   }
 
   async mount(parent: HTMLElement): Promise<void> {
+    this.parent = parent;
     await this.app.init({ background: "#12121e", resizeTo: parent, antialias: true });
     parent.appendChild(this.app.canvas);
+
+    // HTML overlay layer for video bubbles, above the WebGL canvas.
+    const overlay = document.createElement("div");
+    overlay.style.cssText =
+      "position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:2;";
+    parent.appendChild(overlay);
+    this.overlay = overlay;
+
     this.app.stage.addChild(this.world);
     this.app.ticker.add((ticker) => this.update(ticker.deltaMS));
   }
@@ -61,8 +86,28 @@ export class GameClient {
     this.conn.sendChat(body);
   }
 
+  async toggleMic(): Promise<MediaState> {
+    if (this.media) await this.media.setMic(!this.media.micEnabled);
+    return this.mediaState();
+  }
+
+  async toggleCam(): Promise<MediaState> {
+    if (this.media) await this.media.setCam(!this.media.camEnabled);
+    return this.mediaState();
+  }
+
+  private mediaState(): MediaState {
+    return {
+      connected: !!this.media,
+      mic: this.media?.micEnabled ?? false,
+      cam: this.media?.camEnabled ?? false,
+    };
+  }
+
   destroy(): void {
+    void this.media?.disconnect();
     this.conn.close();
+    this.overlay?.remove();
     this.app.destroy(true, { children: true });
   }
 
@@ -81,6 +126,36 @@ export class GameClient {
     this.drawMap();
     this.selfView = this.makeAvatar(this.displayName, colorFor(this.conn.selfId), true);
     this.world.addChild(this.selfView.container);
+
+    if (this.conn.livekit) this.connectMedia(this.conn.livekit);
+  }
+
+  private connectMedia(lk: { url: string; token: string }): void {
+    const media = new ProximityMedia();
+    this.media = media;
+    media.onVideo = (peerId, el) => {
+      const existing = this.videoEls.get(peerId);
+      if (existing && existing !== el) existing.remove();
+      if (el) {
+        styleBubble(el);
+        this.overlay?.appendChild(el);
+        this.videoEls.set(peerId, el);
+      } else if (existing) {
+        existing.remove();
+        this.videoEls.delete(peerId);
+      }
+    };
+    media.onLocalVideo = (el) => {
+      this.localVideoEl?.remove();
+      this.localVideoEl = el;
+      if (el) {
+        styleBubble(el, true);
+        this.overlay?.appendChild(el);
+      }
+    };
+    media.onError = (err) => console.error("[proximity] media error:", err);
+    this.conn.onProximity = (msg) => media.applyProximity(msg);
+    void media.connect(lk.url, lk.token).then(() => this.onMedia?.(this.mediaState()));
   }
 
   private drawMap(): void {
@@ -94,7 +169,6 @@ export class GameClient {
         }
       }
     }
-    // Subtle grid overlay for a sense of motion.
     g.setStrokeStyle({ width: 1, color: 0xffffff, alpha: 0.04 });
     for (let x = 0; x <= this.mapW; x++) g.moveTo(x * ts, 0).lineTo(x * ts, this.mapH * ts);
     for (let y = 0; y <= this.mapH; y++) g.moveTo(0, y * ts).lineTo(this.mapW * ts, y * ts);
@@ -122,6 +196,7 @@ export class GameClient {
   private update(dtMs: number): void {
     const cfg = this.conn.config;
     if (!cfg || !this.selfView) return;
+    const ts = this.tileSize;
 
     // --- Self: input-driven prediction with per-axis local collision (wall sliding) ---
     const { dx, dy } = this.input.axis();
@@ -146,7 +221,7 @@ export class GameClient {
     this.self.facing = facing;
     this.self.moving = moving;
 
-    // --- Send move to server (rate-capped, only on change) ---
+    // --- Send move (rate-capped, only on change) ---
     const now = performance.now();
     if (
       now - this.lastSendAt >= MOVE_SEND_INTERVAL &&
@@ -160,13 +235,15 @@ export class GameClient {
       this.lastSendAt = now;
     }
 
-    // --- Render self ---
-    const ts = this.tileSize;
+    // --- Camera (centered on self) + self sprite ---
+    this.world.x = this.app.screen.width / 2 - this.self.x * ts;
+    this.world.y = this.app.screen.height / 2 - this.self.y * ts;
     this.selfView.container.x = this.self.x * ts;
     this.selfView.container.y = this.self.y * ts;
 
-    // --- Remotes: spawn/despawn views, interpolate positions ---
+    // --- Remotes: spawn/despawn views, interpolate, record screen positions ---
     const renderT = now - INTERP_DELAY;
+    this.screenPos.clear();
     for (const [nid, r] of this.conn.remotes) {
       let view = this.avatars.get(nid);
       if (!view) {
@@ -177,6 +254,7 @@ export class GameClient {
       const p = interpolate(r, renderT);
       view.container.x = p.x * ts;
       view.container.y = p.y * ts;
+      this.screenPos.set(r.id, { x: p.x * ts + this.world.x, y: p.y * ts + this.world.y });
     }
     for (const [nid, view] of this.avatars) {
       if (!this.conn.remotes.has(nid)) {
@@ -186,13 +264,25 @@ export class GameClient {
       }
     }
 
-    // --- Camera follows self ---
-    this.world.x = this.app.screen.width / 2 - this.self.x * ts;
-    this.world.y = this.app.screen.height / 2 - this.self.y * ts;
+    // --- Video bubbles follow their avatars ---
+    const avatarR = ts * 0.4;
+    for (const [peerId, el] of this.videoEls) {
+      const pos = this.screenPos.get(peerId);
+      if (!pos) {
+        el.style.display = "none";
+        continue;
+      }
+      el.style.display = "block";
+      el.style.left = `${pos.x}px`;
+      el.style.top = `${pos.y - avatarR - 6}px`;
+    }
+    if (this.localVideoEl) {
+      this.localVideoEl.style.left = `${this.app.screen.width / 2}px`;
+      this.localVideoEl.style.top = `${this.app.screen.height / 2 - avatarR - 6}px`;
+    }
   }
 
   private blocked(x: number, y: number): boolean {
-    // Sample the body's four extents so we can't clip a wall corner.
     return (
       isBlocked(this.collision, this.mapW, this.mapH, Math.floor(x - BODY_RADIUS), Math.floor(y)) ||
       isBlocked(this.collision, this.mapW, this.mapH, Math.floor(x + BODY_RADIUS), Math.floor(y)) ||
@@ -200,6 +290,24 @@ export class GameClient {
       isBlocked(this.collision, this.mapW, this.mapH, Math.floor(x), Math.floor(y + BODY_RADIUS))
     );
   }
+}
+
+function styleBubble(el: HTMLVideoElement, isLocal = false): void {
+  el.autoplay = true;
+  el.playsInline = true;
+  el.muted = true; // audio is handled separately via RemoteAudioTrack; avoid double playback
+  el.style.cssText = [
+    "position:absolute",
+    "width:112px",
+    "height:84px",
+    "object-fit:cover",
+    "border-radius:10px",
+    `border:2px solid ${isLocal ? "#4ade80" : "#8ab4ff"}`,
+    "transform:translate(-50%,-100%)",
+    "box-shadow:0 6px 20px rgba(0,0,0,0.5)",
+    "background:#000",
+    "pointer-events:none",
+  ].join(";");
 }
 
 function interpolate(r: Remote, t: number): { x: number; y: number } {
@@ -218,12 +326,10 @@ function interpolate(r: Remote, t: number): { x: number; y: number } {
   return { x: last.x, y: last.y };
 }
 
-/** Deterministic pleasant color from a user id string. */
 function colorFor(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  const hue = h % 360;
-  return hslToHex(hue, 65, 55);
+  return hslToHex(h % 360, 65, 55);
 }
 
 function hslToHex(h: number, s: number, l: number): number {
@@ -232,8 +338,5 @@ function hslToHex(h: number, s: number, l: number): number {
   const k = (n: number) => (n + h / 30) % 12;
   const a = s * Math.min(l, 1 - l);
   const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-  const r = Math.round(f(0) * 255);
-  const g = Math.round(f(8) * 255);
-  const b = Math.round(f(4) * 255);
-  return (r << 16) | (g << 8) | b;
+  return (Math.round(f(0) * 255) << 16) | (Math.round(f(8) * 255) << 8) | Math.round(f(4) * 255);
 }

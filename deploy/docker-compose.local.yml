@@ -1,0 +1,24 @@
+# Local dev overrides: publish ports to the host and give LiveKit host networking so the
+# browser can reach media on 127.0.0.1 (Linux). Run:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up
+services:
+  livekit:
+    # Host networking: LiveKit binds 7880/7881(tcp) + 7882(udp) directly on the host and can
+    # advertise loopback ICE candidates. Linux-only; the AWS/CF+DO profiles use explicit ports.
+    network_mode: host
+
+  # NOTE: host ports are remapped off the defaults because this shared dev box already runs
+  # redis/postgres/minio on 6379/5432/9000. Container-internal ports are unchanged; only the
+  # host-side mapping and the app's connection env differ. Adjust freely on your own machine.
+  redis:
+    ports:
+      - "6399:6379"
+
+  postgres:
+    ports:
+      - "5442:5432"
+
+  minio:
+    ports:
+      - "9100:9000"
+      - "9101:9001"

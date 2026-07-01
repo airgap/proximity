@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import { DEFAULT_SPACE_CONFIG } from "@proximity/config";
+import { AUDIO_INNER_RADIUS, DEFAULT_SPACE_CONFIG, RADIUS_HYSTERESIS } from "@proximity/config";
 import {
   EntityFlags,
   Facing,
@@ -10,12 +10,15 @@ import {
   type ChatMessage,
   type MapDescriptor,
   type MoveMessage,
+  type ProximityMessage,
+  type ProximityPeer,
   type ServerMessage,
   type SnapshotEntity,
   type SpaceConfig,
 } from "@proximity/protocol";
-import { Grid } from "@proximity/spatial";
+import { falloffGain, Grid } from "@proximity/spatial";
 import { generateDefaultMap } from "./map.ts";
+import type { MediaProvider } from "./livekit.ts";
 
 /** Data attached to each WebSocket connection. */
 export interface WSData {
@@ -42,6 +45,10 @@ export interface ClientState {
   lastMoveAt: number; // ms epoch of last accepted move (for speed validation)
   aoi: Set<number>; // nids currently within this client's area of interest
   dirty: boolean; // position changed since last grid sync
+
+  /** Current media-relevant peers keyed by peer userId: their audio gain + whether video is on. */
+  prox: Map<string, { gain: number; video: boolean }>;
+  proxSeq: number;
 }
 
 function send(ws: ProximitySocket, msg: ServerMessage): void {
@@ -68,7 +75,10 @@ export class Space {
   private readonly snapshotScratch = new Uint8Array(64 * 1024);
   private readonly neighborScratch: number[] = [];
 
-  constructor(id: string) {
+  constructor(
+    id: string,
+    private readonly media: MediaProvider | null = null,
+  ) {
     this.id = id;
     this.map = generateDefaultMap();
     this.collision = unpackCollision(this.map.collisionB64, this.map.width * this.map.height);
@@ -94,7 +104,7 @@ export class Space {
   // Lifecycle
   // -------------------------------------------------------------------------
 
-  join(ws: ProximitySocket, name: string, avatarId: number): ClientState {
+  async join(ws: ProximitySocket, name: string, avatarId: number): Promise<ClientState> {
     const nid = this.nextNid++;
     const spawn = this.map.spawn;
     const client: ClientState = {
@@ -112,10 +122,26 @@ export class Space {
       lastMoveAt: Date.now(),
       aoi: new Set(),
       dirty: false,
+      prox: new Map(),
+      proxSeq: 0,
     };
     this.clients.set(nid, client);
     this.grid.insert(nid, client.x, client.y);
     ws.data.client = client;
+
+    // Mint a LiveKit token (identity == userId) if media is configured.
+    let livekit: { url: string; token: string } | undefined;
+    if (this.media) {
+      const room = this.media.roomName(this.id);
+      try {
+        const token = await this.media.mintToken(client.id, client.name, room);
+        livekit = { url: this.media.url, token };
+      } catch (err) {
+        console.error(`[proximity] token mint failed for ${client.id}:`, err);
+      }
+    }
+    // The socket may have closed while we were awaiting the token.
+    if (ws.data.client !== client) return client;
 
     send(ws, {
       t: "welcome",
@@ -125,10 +151,11 @@ export class Space {
       config: this.config,
       map: this.map,
       you: { x: client.x, y: client.y, facing: client.facing },
+      livekit,
     });
 
     // Immediately populate the newcomer's AOI so they see the room without a tick of latency.
-    this.syncClientAOI(client);
+    this.syncClient(client);
     return client;
   }
 
@@ -218,12 +245,15 @@ export class Space {
     // Broadcast position snapshots at snapshotRate (a fraction of tickRate).
     const every = Math.max(1, Math.round(this.config.tickRate / this.config.snapshotRate));
     if (this.tick % every === 0) {
-      for (const c of this.clients.values()) this.syncClientAOI(c);
+      for (const c of this.clients.values()) this.syncClient(c);
     }
   }
 
-  /** Diff a client's AOI (enter/leave) and send them a fresh binary position snapshot. */
-  private syncClientAOI(client: ClientState): void {
+  /**
+   * Per-client tick work: diff AOI (enter/leave), send a binary position snapshot, and emit an
+   * edge-triggered proximity diff (who to hear/see + audio gains) that drives client media.
+   */
+  private syncClient(client: ClientState): void {
     const neighbors = this.grid.queryWithin(
       client.x,
       client.y,
@@ -232,6 +262,7 @@ export class Space {
       this.neighborScratch,
     );
 
+    // --- AOI enter/leave ---
     const next = new Set<number>();
     for (let i = 0; i < neighbors.length; i++) {
       const nid = neighbors[i]!;
@@ -255,7 +286,7 @@ export class Space {
     }
     client.aoi = next;
 
-    // Binary position snapshot of the current AOI.
+    // --- Binary position snapshot of the current AOI ---
     const entities: SnapshotEntity[] = new Array(neighbors.length);
     for (let i = 0; i < neighbors.length; i++) {
       const o = this.clients.get(neighbors[i]!)!;
@@ -267,8 +298,53 @@ export class Space {
         flags: o.moving ? EntityFlags.Moving : 0,
       };
     }
-    const buf = encodeSnapshot(this.tick, entities, this.snapshotScratch);
-    client.ws.send(buf);
+    client.ws.send(encodeSnapshot(this.tick, entities, this.snapshotScratch));
+
+    // --- Proximity (media) diff ---
+    this.diffProximity(client, neighbors);
+  }
+
+  /**
+   * Compute the audible/visible peer set with distance-based audio gains and send only the
+   * delta vs the client's previous set. Hysteresis (keep until dist exceeds radius + margin)
+   * prevents subscribe/unsubscribe flapping at radius boundaries.
+   */
+  private diffProximity(client: ClientState, neighbors: readonly number[]): void {
+    const cfg = this.config;
+    const nextProx = new Map<string, { gain: number; video: boolean }>();
+    const add: ProximityPeer[] = [];
+    const update: ProximityPeer[] = [];
+
+    for (let i = 0; i < neighbors.length; i++) {
+      const o = this.clients.get(neighbors[i]!)!;
+      const dx = o.x - client.x;
+      const dy = o.y - client.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const prev = client.prox.get(o.id);
+
+      const audioLimit = prev ? cfg.audioRadius + RADIUS_HYSTERESIS : cfg.audioRadius;
+      if (dist > audioLimit) continue; // not (or no longer) audible
+
+      const gain = falloffGain(dist, AUDIO_INNER_RADIUS, cfg.audioRadius);
+      const videoLimit = prev?.video ? cfg.videoRadius + RADIUS_HYSTERESIS : cfg.videoRadius;
+      const video = dist <= videoLimit;
+      nextProx.set(o.id, { gain, video });
+
+      if (!prev) {
+        add.push({ id: o.id, audioGain: gain, video });
+      } else if (Math.abs(prev.gain - gain) > 0.02 || prev.video !== video) {
+        update.push({ id: o.id, audioGain: gain, video });
+      }
+    }
+
+    const remove: string[] = [];
+    for (const id of client.prox.keys()) if (!nextProx.has(id)) remove.push(id);
+    client.prox = nextProx;
+
+    if (add.length || update.length || remove.length) {
+      const msg: ProximityMessage = { t: "proximity", seq: ++client.proxSeq, add, update, remove };
+      send(client.ws, msg);
+    }
   }
 }
 
@@ -276,10 +352,12 @@ export class Space {
 export class SpaceRegistry {
   private readonly spaces = new Map<string, Space>();
 
+  constructor(private readonly media: MediaProvider | null = null) {}
+
   getOrCreate(id: string): Space {
     let s = this.spaces.get(id);
     if (!s) {
-      s = new Space(id);
+      s = new Space(id, this.media);
       s.start();
       this.spaces.set(id, s);
     }

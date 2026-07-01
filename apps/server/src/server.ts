@@ -2,6 +2,7 @@ import type { Server } from "bun";
 import type { ServerEnv } from "@proximity/config";
 import { decodeClientJson, type ClientMessage } from "@proximity/protocol";
 import { SpaceRegistry, type ProximitySocket, type WSData } from "./space.ts";
+import type { MediaProvider } from "./livekit.ts";
 
 export interface RunningServer {
   server: Server;
@@ -13,7 +14,8 @@ function handleMessage(ws: ProximitySocket, registry: SpaceRegistry, msg: Client
   if (msg.t === "join") {
     if (ws.data.client) return; // already joined
     const space = registry.getOrCreate(msg.spaceId || "default");
-    space.join(ws, msg.name, msg.avatarId);
+    // join is async (mints a LiveKit token); fire-and-forget, welcome is sent when ready.
+    void space.join(ws, msg.name, msg.avatarId);
     return;
   }
 
@@ -37,8 +39,11 @@ function handleMessage(ws: ProximitySocket, registry: SpaceRegistry, msg: Client
 }
 
 /** Start the world server. Pass PORT: 0 for an ephemeral port (tests). */
-export function startServer(env: Pick<ServerEnv, "HOST" | "PORT">): RunningServer {
-  const registry = new SpaceRegistry();
+export function startServer(
+  env: Pick<ServerEnv, "HOST" | "PORT">,
+  media: MediaProvider | null = null,
+): RunningServer {
+  const registry = new SpaceRegistry(media);
 
   const server = Bun.serve<WSData, {}>({
     hostname: env.HOST,

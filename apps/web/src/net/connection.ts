@@ -6,6 +6,7 @@ import {
   type ClientMessage,
   type Facing,
   type MapDescriptor,
+  type ProximityMessage,
   type ServerMessage,
   type SpaceConfig,
 } from "@proximity/protocol";
@@ -47,12 +48,14 @@ export class Connection {
   map: MapDescriptor | null = null;
   config: SpaceConfig | null = null;
   spawn = { x: 0, y: 0, facing: 0 as Facing };
+  livekit: { url: string; token: string } | null = null;
   readonly remotes = new Map<number, Remote>();
 
   onWelcome?: () => void;
   onCorrection?: (x: number, y: number, facing: number) => void;
   onChat?: (name: string, body: string) => void;
   onStatus?: (s: ConnectionStatus) => void;
+  onProximity?: (msg: ProximityMessage) => void;
 
   private readonly ws: WebSocket;
   private seq = 0;
@@ -101,6 +104,7 @@ export class Connection {
         this.map = m.map;
         this.config = m.config;
         this.spawn = { x: m.you.x, y: m.you.y, facing: m.you.facing };
+        this.livekit = m.livekit ?? null;
         this.setStatus("open");
         this.onWelcome?.();
         break;
@@ -125,6 +129,9 @@ export class Connection {
         break;
       case "correction":
         this.onCorrection?.(m.x, m.y, m.facing);
+        break;
+      case "proximity":
+        this.onProximity?.(m);
         break;
       case "pong":
       case "error":

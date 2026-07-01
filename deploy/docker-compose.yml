@@ -1,0 +1,59 @@
+# Proximity — backing services (portable base).
+# App services (world-server, web, caddy) run natively in dev and are added as containers in
+# phase 5 along with per-environment overrides (aws / cfdo / onprem / gpu).
+name: proximity
+
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${PG_USER:-proximity}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-proximity_dev}
+      POSTGRES_DB: ${PG_DB:-proximity}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-proximity}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    volumes:
+      - miniodata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

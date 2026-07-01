@@ -1,0 +1,24 @@
+# LiveKit SFU config for LOCAL DEV.
+# Prod/on-prem configs (TURN/TURNS, external IP, multi-node Redis) come in phase 5.
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+
+rtc:
+  # Single UDP port mux for media (one firewall hole; easiest to reason about).
+  udp_port: 7882
+  tcp_port: 7881
+  # Loopback dev: advertise local interfaces (incl. 127.0.0.1) rather than a public IP.
+  use_external_ip: false
+
+# Dev key/secret. The server mints access tokens with these; the browser never sees the secret.
+keys:
+  devkey: secret_devsecret_change_me_1234567890
+
+# Rooms auto-close shortly after the last participant leaves.
+room:
+  empty_timeout: 300
+  max_participants: 300
+
+logging:
+  level: info

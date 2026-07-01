@@ -140,6 +140,8 @@ export interface WelcomeMessage {
   map: MapDescriptor;
   /** Authoritative starting position. */
   you: { x: number; y: number; facing: Facing };
+  /** LiveKit connection info for media (absent if media is not configured). */
+  livekit?: { url: string; token: string };
 }
 
 /** An entity entered this client's area of interest (or just joined the space nearby). */
@@ -192,7 +194,7 @@ export interface ProximityMessage {
   t: "proximity";
   seq: number;
   add: ProximityPeer[];
-  update: Pick<ProximityPeer, "id" | "audioGain">[];
+  update: ProximityPeer[];
   remove: string[];
 }
 

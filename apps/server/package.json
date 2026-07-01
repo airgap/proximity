@@ -11,6 +11,7 @@
   "dependencies": {
     "@proximity/config": "workspace:*",
     "@proximity/protocol": "workspace:*",
-    "@proximity/spatial": "workspace:*"
+    "@proximity/spatial": "workspace:*",
+    "livekit-server-sdk": "^2.9.0"
   }
 }
