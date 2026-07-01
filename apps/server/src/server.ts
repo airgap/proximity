@@ -24,7 +24,7 @@ function handleMessage(ws: ProximitySocket, registry: SpaceRegistry, msg: Client
     if (ws.data.client) return; // already joined
     const space = registry.getOrCreate(msg.spaceId || "default");
     // join is async (mints a LiveKit token); fire-and-forget, welcome is sent when ready.
-    void space.join(ws, msg.name, msg.avatarId);
+    void space.join(ws, msg.name, msg.avatarId, msg.observer ?? false);
     return;
   }
 

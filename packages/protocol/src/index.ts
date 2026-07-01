@@ -98,6 +98,11 @@ export interface JoinMessage {
   name: string;
   avatarId: number;
   token?: string;
+  /**
+   * Read-only observer (e.g. the recording template): receives presentation state + annotation
+   * strokes but is NOT placed on the map — no avatar, no AOI, invisible to other users.
+   */
+  observer?: boolean;
 }
 
 export interface MoveMessage {

@@ -39,6 +39,7 @@ export interface ClientState {
   avatarId: number;
   ws: ProximitySocket;
   space: Space;
+  observer: boolean;
 
   x: number;
   y: number;
@@ -119,7 +120,12 @@ export class Space {
   // Lifecycle
   // -------------------------------------------------------------------------
 
-  async join(ws: ProximitySocket, name: string, avatarId: number): Promise<ClientState> {
+  async join(
+    ws: ProximitySocket,
+    name: string,
+    avatarId: number,
+    observer = false,
+  ): Promise<ClientState> {
     const nid = this.nextNid++;
     const spawn = this.map.spawn;
     const client: ClientState = {
@@ -129,6 +135,7 @@ export class Space {
       avatarId: avatarId | 0,
       ws,
       space: this,
+      observer,
       x: spawn.x,
       y: spawn.y,
       facing: Facing.Down,
@@ -141,12 +148,14 @@ export class Space {
       proxSeq: 0,
     };
     this.clients.set(nid, client);
-    this.grid.insert(nid, client.x, client.y);
+    // Observers are not placed on the map (no avatar, no AOI, invisible to others).
+    if (!observer) this.grid.insert(nid, client.x, client.y);
     ws.data.client = client;
 
-    // Mint a LiveKit token (identity == userId) if media is configured.
+    // Mint a LiveKit token (identity == userId) if media is configured. Observers use the
+    // recorder token supplied by egress, so they don't need one.
     let livekit: { url: string; token: string } | undefined;
-    if (this.media) {
+    if (this.media && !observer) {
       const room = this.media.roomName(this.id);
       try {
         const token = await this.media.mintToken(client.id, client.name, room);
@@ -169,8 +178,8 @@ export class Space {
       livekit,
     });
 
-    // Send recent chat scrollback (if persisted).
-    if (this.chat) {
+    // Send recent chat scrollback (if persisted). Observers skip it.
+    if (this.chat && !observer) {
       try {
         const history = await this.chat.recent(this.id, 50);
         if (history.length && ws.data.client === client) {
@@ -196,7 +205,7 @@ export class Space {
     }
 
     // Immediately populate the newcomer's AOI so they see the room without a tick of latency.
-    if (ws.data.client === client) this.syncClient(client);
+    if (ws.data.client === client && !observer) this.syncClient(client);
     return client;
   }
 

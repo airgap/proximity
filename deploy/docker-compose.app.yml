@@ -64,6 +64,18 @@ services:
     image: proximity-web:${TAG:-latest}
     restart: unless-stopped
 
+  # Egress recorder template (static). Point EGRESS_TEMPLATE_URL=http://recorder at it so
+  # recordings bake in annotations. VITE_WORLD_WS must be the world-server WS reachable from
+  # the egress container's browser (e.g. ws://host.docker.internal:8080/ws locally).
+  recorder:
+    build:
+      context: ..
+      dockerfile: apps/recorder/Dockerfile
+      args:
+        VITE_WORLD_WS: ${VITE_WORLD_WS:-ws://host.docker.internal:8080/ws}
+    image: proximity-recorder:${TAG:-latest}
+    restart: unless-stopped
+
   caddy:
     image: caddy:2
     environment:
