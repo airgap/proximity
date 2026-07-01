@@ -76,3 +76,36 @@ test("open mode grants an anonymous wildcard identity", () => {
 test("verifierFromEnv fails fast when shared_secret has no secret", () => {
   expect(() => verifierFromEnv(loadServerEnv({ PROXIMITY_AUTH_MODE: "shared_secret" }))).toThrow();
 });
+
+// Contract test: lyku.co signs grants with Web Crypto HS256 (no jose on Workers). This replicates
+// that exact signer and asserts the token verifies through Proximity's jose-based verifier — so
+// the lyku -> Proximity handshake can't silently drift.
+async function signWebCryptoHs256(payload: Record<string, unknown>, secret: string): Promise<string> {
+  const enc = new TextEncoder();
+  const b64url = (bytes: Uint8Array) => {
+    let s = "";
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  };
+  const b64s = (s: string) => b64url(enc.encode(s));
+  const now = Math.floor(Date.now() / 1000);
+  const data = `${b64s(JSON.stringify({ alg: "HS256", typ: "JWT" }))}.${b64s(
+    JSON.stringify({ ...payload, iat: now, exp: now + 900 }),
+  )}`;
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(data)));
+  return `${data}.${b64url(sig)}`;
+}
+
+test("cross-impl: a Web-Crypto HS256 grant (lyku-style) verifies via jose", async () => {
+  const v = verifierFromEnv(env());
+  const token = await signWebCryptoHs256(
+    { sub: "u_9", name: "Nicole", tenant: "org_1", spaces: ["world:org_1"], caps: ["join", "present"] },
+    SECRET,
+  );
+  const g = await v.fromToken(token);
+  expect(g?.sub).toBe("u_9");
+  expect(g?.name).toBe("Nicole");
+  expect(g?.tenant).toBe("org_1");
+  expect(g?.spaces).toEqual(["world:org_1"]);
+});
