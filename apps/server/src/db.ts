@@ -7,6 +7,7 @@ export type Db = SQL;
 
 /** Build a Postgres connection from env, or null if not configured. */
 export function dbFromEnv(env: ServerEnv): Db | null {
+  if (env.PG_URL) return new SQL(env.PG_URL);
   if (!env.PG_HOST || !env.PG_DB || !env.PG_USER) return null;
   const pw = env.PG_PASSWORD ?? "";
   const url = `postgres://${env.PG_USER}:${encodeURIComponent(pw)}@${env.PG_HOST}:${env.PG_PORT}/${env.PG_DB}`;

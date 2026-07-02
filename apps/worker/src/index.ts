@@ -13,8 +13,8 @@ import { generateNote, noteToMarkdown } from "./notetaker.ts";
  */
 const env = loadServerEnv();
 
-if (!env.PG_HOST || !env.PG_DB || !env.PG_USER) {
-  console.error("[worker] Postgres not configured (PG_HOST/PG_DB/PG_USER). Exiting.");
+if (!env.PG_URL && (!env.PG_HOST || !env.PG_DB || !env.PG_USER)) {
+  console.error("[worker] Postgres not configured (PG_URL or PG_HOST/PG_DB/PG_USER). Exiting.");
   process.exit(1);
 }
 if (!env.S3_BUCKET) {
@@ -23,7 +23,8 @@ if (!env.S3_BUCKET) {
 }
 
 const sql = new SQL(
-  `postgres://${env.PG_USER}:${encodeURIComponent(env.PG_PASSWORD ?? "")}@${env.PG_HOST}:${env.PG_PORT}/${env.PG_DB}`,
+  env.PG_URL ??
+    `postgres://${env.PG_USER}:${encodeURIComponent(env.PG_PASSWORD ?? "")}@${env.PG_HOST}:${env.PG_PORT}/${env.PG_DB}`,
 );
 const s3 = new S3Client({
   endpoint: env.S3_ENDPOINT,

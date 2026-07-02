@@ -48,6 +48,9 @@ const ServerEnvSchema = z.object({
   REDIS_URL: z.string().optional(),
 
   // Postgres (durable data). Optional until phase 2.
+  // Full connection string (e.g. a DO managed PG string, sslmode included). Takes
+  // precedence over the discrete PG_* vars below.
+  PG_URL: z.string().optional(),
   PG_HOST: z.string().optional(),
   PG_PORT: z.coerce.number().int().positive().default(5432),
   PG_DB: z.string().optional(),
