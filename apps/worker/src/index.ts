@@ -62,54 +62,54 @@ async function postNote(payload: unknown): Promise<void> {
 }
 
 interface Row {
-  egress_id: string;
-  space_id: string | null;
-  presenter_id: string | null;
-  s3_video_key: string | null;
-  duration_ms: string | number | null;
+  egressId: string;
+  spaceId: string | null;
+  presenterId: string | null;
+  s3VideoKey: string | null;
+  durationMs: string | number | null;
 }
 
 async function processOne(row: Row): Promise<void> {
-  const { egress_id, s3_video_key, space_id, presenter_id } = row;
+  const { egressId, s3VideoKey, spaceId, presenterId } = row;
   // Nothing to transcribe without a file or a model — mark processed so we don't spin on it.
-  if (!s3_video_key || !env.WHISPER_MODEL) {
-    await sql`UPDATE recordings SET status='processed' WHERE egress_id=${egress_id}`;
+  if (!s3VideoKey || !env.WHISPER_MODEL) {
+    await sql`UPDATE "proximityRecordings" SET "status"='processed' WHERE "egressId"=${egressId}`;
     return;
   }
   try {
-    const bytes = new Uint8Array(await s3.file(s3_video_key).arrayBuffer());
+    const bytes = new Uint8Array(await s3.file(s3VideoKey).arrayBuffer());
     const text = await transcribeRecording(bytes, env.WHISPER_MODEL);
-    const base = s3_video_key.replace(/\.[^.]+$/, "");
+    const base = s3VideoKey.replace(/\.[^.]+$/, "");
 
     const transcriptKey = `${base}.vtt`;
-    await s3.write(transcriptKey, toVtt(text, Number(row.duration_ms ?? 0)));
+    await s3.write(transcriptKey, toVtt(text, Number(row.durationMs ?? 0)));
 
     // Notetaker: structured note (LLM if configured, else extractive) -> markdown artifact.
     const note = await generateNote(text, { llmModel: env.LLM_MODEL });
     const notesKey = `${base}.notes.md`;
-    await s3.write(notesKey, noteToMarkdown(note, { spaceId: space_id ?? undefined, transcriptRef: transcriptKey }));
+    await s3.write(notesKey, noteToMarkdown(note, { spaceId: spaceId ?? undefined, transcriptRef: transcriptKey }));
 
     await sql`
-      UPDATE recordings
-      SET status='processed', transcript_key=${transcriptKey}, summary=${note.summary}
-      WHERE egress_id=${egress_id}
+      UPDATE "proximityRecordings"
+      SET "status"='processed', "transcriptKey"=${transcriptKey}, "summary"=${note.summary}
+      WHERE "egressId"=${egressId}
     `;
-    await postNote({ egressId: egress_id, spaceId: space_id, presenterId: presenter_id, note, transcriptKey, notesKey });
+    await postNote({ egressId, spaceId, presenterId, note, transcriptKey, notesKey });
     console.log(
-      `[worker] processed ${egress_id}: ${text.length} chars, ${note.actionItems.length} action item(s) [${note.engine}] -> ${notesKey}`,
+      `[worker] processed ${egressId}: ${text.length} chars, ${note.actionItems.length} action item(s) [${note.engine}] -> ${notesKey}`,
     );
   } catch (err) {
-    console.error(`[worker] failed ${egress_id}:`, err);
-    await sql`UPDATE recordings SET status='process_failed' WHERE egress_id=${egress_id}`;
+    console.error(`[worker] failed ${egressId}:`, err);
+    await sql`UPDATE "proximityRecordings" SET "status"='process_failed' WHERE "egressId"=${egressId}`;
   }
 }
 
 async function tick(): Promise<void> {
   const rows = (await sql`
-    SELECT egress_id, space_id, presenter_id, s3_video_key, duration_ms
-    FROM recordings
-    WHERE status='complete'
-    ORDER BY ended_at ASC NULLS LAST
+    SELECT "egressId", "spaceId", "presenterId", "s3VideoKey", "durationMs"
+    FROM "proximityRecordings"
+    WHERE "status"='complete'
+    ORDER BY "ended" ASC NULLS LAST
     LIMIT 3
   `) as Row[];
   for (const row of rows) await processOne(row);

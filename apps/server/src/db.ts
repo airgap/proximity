@@ -14,24 +14,28 @@ export function dbFromEnv(env: ServerEnv): Db | null {
   return new SQL(url);
 }
 
-/** Apply any unapplied SQL files in infra/migrations, tracked in a _migrations table. */
+/**
+ * Apply any unapplied SQL files in infra/migrations, tracked in "proximityMigrations".
+ * In a host-shared database (PG_MIGRATE=false) the host's Lockstep pg-models own the schema
+ * and this is skipped entirely; the DDL is IF NOT EXISTS + shape-identical either way.
+ */
 export async function migrate(sql: Db): Promise<void> {
-  await sql`CREATE TABLE IF NOT EXISTS _migrations (
-    name text PRIMARY KEY,
-    applied_at timestamptz NOT NULL DEFAULT now()
+  await sql`CREATE TABLE IF NOT EXISTS "proximityMigrations" (
+    "name" text PRIMARY KEY,
+    "applied" timestamptz NOT NULL DEFAULT now()
   )`;
   const dir = fileURLToPath(new URL("../../../infra/migrations/", import.meta.url));
   const files = readdirSync(dir)
     .filter((f) => f.endsWith(".sql"))
     .sort();
-  const appliedRows = (await sql`SELECT name FROM _migrations`) as { name: string }[];
+  const appliedRows = (await sql`SELECT "name" FROM "proximityMigrations"`) as { name: string }[];
   const applied = new Set(appliedRows.map((r) => r.name));
 
   for (const file of files) {
     if (applied.has(file)) continue;
     const content = readFileSync(dir + file, "utf8");
     await sql.unsafe(content);
-    await sql`INSERT INTO _migrations (name) VALUES (${file})`;
+    await sql`INSERT INTO "proximityMigrations" ("name") VALUES (${file})`;
     console.log(`[migrate] applied ${file}`);
   }
 }
@@ -88,9 +92,9 @@ export class PgRecordingStore implements RecordingStore {
 
   async started(egressId: string, spaceId: string, presenterId: string | null): Promise<void> {
     await this.db`
-      INSERT INTO recordings (egress_id, space_id, presenter_id, status)
+      INSERT INTO "proximityRecordings" ("egressId", "spaceId", "presenterId", "status")
       VALUES (${egressId}, ${spaceId}, ${presenterId}, 'recording')
-      ON CONFLICT (egress_id) DO UPDATE SET status = 'recording'
+      ON CONFLICT ("egressId") DO UPDATE SET "status" = 'recording'
     `;
   }
 
@@ -101,28 +105,28 @@ export class PgRecordingStore implements RecordingStore {
     durationMs: number | null,
   ): Promise<void> {
     await this.db`
-      UPDATE recordings
-      SET status = ${status}, s3_video_key = ${s3VideoKey}, duration_ms = ${durationMs}, ended_at = now()
-      WHERE egress_id = ${egressId}
+      UPDATE "proximityRecordings"
+      SET "status" = ${status}, "s3VideoKey" = ${s3VideoKey}, "durationMs" = ${durationMs}, "ended" = now()
+      WHERE "egressId" = ${egressId}
     `;
   }
 
   async pendingPostProcess(limit: number): Promise<RecordingRow[]> {
     const rows = (await this.db`
-      SELECT egress_id, space_id, status, s3_video_key, duration_ms, started_at, ended_at
-      FROM recordings
-      WHERE status = 'complete'
-      ORDER BY ended_at ASC NULLS LAST
+      SELECT "egressId", "spaceId", "status", "s3VideoKey", "durationMs", "started", "ended"
+      FROM "proximityRecordings"
+      WHERE "status" = 'complete'
+      ORDER BY "ended" ASC NULLS LAST
       LIMIT ${limit}
     `) as any[];
     return rows.map((r) => ({
-      egressId: r.egress_id,
-      spaceId: r.space_id,
+      egressId: r.egressId,
+      spaceId: r.spaceId,
       status: r.status,
-      s3VideoKey: r.s3_video_key,
-      durationMs: r.duration_ms ? Number(r.duration_ms) : null,
-      startedAt: new Date(r.started_at).getTime(),
-      endedAt: r.ended_at ? new Date(r.ended_at).getTime() : null,
+      s3VideoKey: r.s3VideoKey,
+      durationMs: r.durationMs ? Number(r.durationMs) : null,
+      startedAt: new Date(r.started).getTime(),
+      endedAt: r.ended ? new Date(r.ended).getTime() : null,
     }));
   }
 
@@ -133,10 +137,10 @@ export class PgRecordingStore implements RecordingStore {
     summary: string | null,
   ): Promise<void> {
     await this.db`
-      UPDATE recordings
-      SET status = 'processed', transcript_key = ${transcriptKey},
-          thumbnail_key = ${thumbnailKey}, summary = ${summary}
-      WHERE egress_id = ${egressId}
+      UPDATE "proximityRecordings"
+      SET "status" = 'processed', "transcriptKey" = ${transcriptKey},
+          "thumbnailKey" = ${thumbnailKey}, "summary" = ${summary}
+      WHERE "egressId" = ${egressId}
     `;
   }
 }
@@ -147,31 +151,31 @@ export class PgChatStore implements ChatStore {
 
   append(spaceId: string, authorId: string, authorName: string, channel: string, body: string): void {
     this.sql`
-      INSERT INTO chat_messages (space_id, author_id, author_name, channel, body)
+      INSERT INTO "proximityChatMessages" ("spaceId", "authorId", "authorName", "channel", "body")
       VALUES (${spaceId}, ${authorId}, ${authorName}, ${channel}, ${body})
     `.catch((err: unknown) => console.error("[chat] persist failed:", err));
   }
 
   async recent(spaceId: string, limit: number): Promise<ChatRecord[]> {
     const rows = (await this.sql`
-      SELECT author_id, author_name, channel, body, created_at
-      FROM chat_messages
-      WHERE space_id = ${spaceId}
-      ORDER BY created_at DESC
+      SELECT "authorId", "authorName", "channel", "body", "created"
+      FROM "proximityChatMessages"
+      WHERE "spaceId" = ${spaceId}
+      ORDER BY "created" DESC
       LIMIT ${limit}
     `) as {
-      author_id: string;
-      author_name: string;
+      authorId: string;
+      authorName: string;
       channel: string;
       body: string;
-      created_at: Date;
+      created: Date;
     }[];
     return rows
       .map((r) => ({
-        from: { id: r.author_id, name: r.author_name },
+        from: { id: r.authorId, name: r.authorName },
         channel: r.channel,
         body: r.body,
-        ts: new Date(r.created_at).getTime(),
+        ts: new Date(r.created).getTime(),
       }))
       .reverse(); // oldest-first for display
   }

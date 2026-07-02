@@ -51,6 +51,11 @@ const ServerEnvSchema = z.object({
   // Full connection string (e.g. a DO managed PG string, sslmode included). Takes
   // precedence over the discrete PG_* vars below.
   PG_URL: z.string().optional(),
+  /**
+   * Whether Proximity runs its own migrations at boot. Set false when sharing a host database
+   * whose schema is owned by the host's Lockstep pg-models (lyku.org monolith / lyku.co backend).
+   */
+  PG_MIGRATE: bool.default("true"),
   PG_HOST: z.string().optional(),
   PG_PORT: z.coerce.number().int().positive().default(5432),
   PG_DB: z.string().optional(),

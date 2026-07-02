@@ -17,7 +17,8 @@ if (db) {
   // Retry briefly so we tolerate Postgres still starting (no hard depends_on across profiles).
   for (let attempt = 1; attempt <= 10; attempt++) {
     try {
-      await migrate(db);
+      // PG_MIGRATE=false when the schema is owned by a host's Lockstep models (shared database).
+      if (env.PG_MIGRATE) await migrate(db);
       chat = new PgChatStore(db);
       recordings = new PgRecordingStore(db);
       break;
