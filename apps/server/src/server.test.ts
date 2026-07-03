@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { BinaryTag, binaryTagOf } from "@proximity/protocol";
-import { startServer, type RunningServer } from "./server.ts";
+import { originMatches, startServer, type RunningServer } from "./server.ts";
 
 let rs: RunningServer;
 let url: string;
@@ -84,4 +84,32 @@ test("two clients: mutual AOI enter, leave on distance, and move corrections", a
 
   a.ws.close();
   b.ws.close();
+});
+
+describe("originMatches (HOST_ORIGINS wildcard entries)", () => {
+  test("exact origins still match exactly", () => {
+    expect(originMatches("https://lyku.co", "https://lyku.co")).toBe(true);
+    expect(originMatches("https://lyku.co", "https://www.lyku.co")).toBe(false);
+  });
+
+  test("*.domain matches any subdomain, any scheme", () => {
+    expect(originMatches("https://acme.lyku.co", "*.lyku.co")).toBe(true);
+    expect(originMatches("http://a.b.lyku.co", "*.lyku.co")).toBe(true);
+  });
+
+  test("scheme-pinned wildcard enforces the scheme", () => {
+    expect(originMatches("https://acme.lyku.co", "https://*.lyku.co")).toBe(true);
+    expect(originMatches("http://acme.lyku.co", "https://*.lyku.co")).toBe(false);
+  });
+
+  test("wildcard never matches the apex or lookalike hosts", () => {
+    expect(originMatches("https://lyku.co", "*.lyku.co")).toBe(false);
+    expect(originMatches("https://evil-lyku.co", "*.lyku.co")).toBe(false);
+    expect(originMatches("https://lyku.co.evil.com", "*.lyku.co")).toBe(false);
+  });
+
+  test("garbage origins never match", () => {
+    expect(originMatches("null", "*.lyku.co")).toBe(false);
+    expect(originMatches("", "*.lyku.co")).toBe(false);
+  });
 });

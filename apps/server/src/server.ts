@@ -24,10 +24,36 @@ export interface ServerDeps {
   corsOrigins?: string;
 }
 
+/**
+ * Does `origin` match an allow-list entry? Entries are exact origins, or wildcard-subdomain
+ * forms — "*.lyku.co" (any scheme) / "https://*.lyku.co" (scheme-pinned). A wildcard matches
+ * subdomains only, never the apex, and hosts that merely end with the same string
+ * ("evil-lyku.co") don't match — the suffix includes the dot.
+ */
+export function originMatches(origin: string, entry: string): boolean {
+  if (entry === origin) return true;
+  if (!entry.includes("*.")) return false;
+  let scheme: string | null = null;
+  let host = entry;
+  const idx = entry.indexOf("://");
+  if (idx !== -1) {
+    scheme = entry.slice(0, idx);
+    host = entry.slice(idx + 3);
+  }
+  if (!host.startsWith("*.")) return false;
+  try {
+    const o = new URL(origin);
+    if (scheme && o.protocol !== `${scheme}:`) return false;
+    return o.hostname.endsWith(host.slice(1)); // ".lyku.co" — dot included
+  } catch {
+    return false;
+  }
+}
+
 function corsHeaders(req: Request, allow: string): Record<string, string> {
   const origin = req.headers.get("origin") ?? "";
   const list = allow.split(",").map((s) => s.trim());
-  const ok = allow === "*" || list.includes(origin);
+  const ok = allow === "*" || list.some((entry) => originMatches(origin, entry));
   return {
     "access-control-allow-origin": allow === "*" ? "*" : ok ? origin : "null",
     "access-control-allow-methods": "GET, POST, OPTIONS",
