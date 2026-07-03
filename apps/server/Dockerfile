@@ -9,6 +9,7 @@ COPY apps/server ./apps/server
 COPY apps/web/package.json ./apps/web/package.json
 COPY apps/worker/package.json ./apps/worker/package.json
 COPY apps/loadgen/package.json ./apps/loadgen/package.json
+COPY apps/recorder/package.json ./apps/recorder/package.json
 COPY infra ./infra
 # Install AFTER copying source so Bun creates the per-package @proximity/* symlinks in place.
 RUN bun install --frozen-lockfile

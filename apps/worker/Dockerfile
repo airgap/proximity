@@ -11,6 +11,7 @@ COPY apps/worker ./apps/worker
 COPY apps/server/package.json ./apps/server/package.json
 COPY apps/web/package.json ./apps/web/package.json
 COPY apps/loadgen/package.json ./apps/loadgen/package.json
+COPY apps/recorder/package.json ./apps/recorder/package.json
 RUN bun install --frozen-lockfile
 USER bun
 ENV NODE_ENV=production

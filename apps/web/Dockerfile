@@ -8,6 +8,7 @@ COPY apps/web ./apps/web
 COPY apps/server/package.json ./apps/server/package.json
 COPY apps/worker/package.json ./apps/worker/package.json
 COPY apps/loadgen/package.json ./apps/loadgen/package.json
+COPY apps/recorder/package.json ./apps/recorder/package.json
 RUN bun install --frozen-lockfile && cd apps/web && bun run build
 
 FROM nginx:alpine AS runtime
