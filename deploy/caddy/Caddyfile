@@ -6,8 +6,9 @@
 }
 
 {$PUBLIC_HOST} {
-	# World-server: realtime WebSocket + egress webhook.
-	@world path /ws /livekit/webhook
+	# World-server: realtime WebSocket, health, egress webhook, and the host-bridge HTTP API
+	# (/api/spaces/:id/presence + /api/spaces/:id/chat — lyku polls/posts these cross-origin).
+	@world path /ws /healthz /livekit/webhook /api/*
 	reverse_proxy @world world-server:8080
 
 	# LiveKit signaling over WSS (optional through Caddy; media stays direct).
