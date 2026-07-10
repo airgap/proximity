@@ -1,4 +1,4 @@
-import { Application, Assets, Container, Graphics, Sprite, Text, type Texture } from "pixi.js";
+import { Application, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import { Facing, isBlocked, unpackCollision } from "@proximity/protocol";
 import { Connection, type PresentationState, type Remote } from "../net/connection.ts";
 import { Input } from "./input.ts";
@@ -357,24 +357,28 @@ export class GameClient {
     container.addChild(g);
 
     // Account image, if any: a circular-clipped sprite laid over the disc. Loaded
-    // async; the disc stays as a placeholder and remains if the load fails.
+    // via a plain cross-origin Image (not Assets.load, which needs its loader
+    // system initialized) → Texture.from. The disc is the placeholder while it
+    // loads and the fallback if it errors.
     if (avatarUrl) {
-      void Assets.load(avatarUrl)
-        .then((texture: Texture) => {
-          if (container.destroyed) return;
-          const sprite = new Sprite(texture);
-          sprite.anchor.set(0.5);
-          const d = r * 2;
-          sprite.width = d;
-          sprite.height = d;
-          const mask = new Graphics().circle(0, 0, r).fill(0xffffff);
-          sprite.mask = mask;
-          container.addChild(sprite);
-          container.addChild(mask);
-        })
-        .catch(() => {
-          /* keep the colored disc */
-        });
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        if (container.destroyed) return;
+        const sprite = new Sprite(Texture.from(img));
+        sprite.anchor.set(0.5);
+        const d = r * 2;
+        sprite.width = d;
+        sprite.height = d;
+        const mask = new Graphics().circle(0, 0, r).fill(0xffffff);
+        sprite.mask = mask;
+        container.addChild(sprite);
+        container.addChild(mask);
+      };
+      img.onerror = () => {
+        /* keep the colored disc */
+      };
+      img.src = avatarUrl;
     }
 
     const label = new Text({
