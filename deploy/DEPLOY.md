@@ -78,3 +78,42 @@ Requires the NVIDIA driver + `nvidia-container-toolkit`. Omit it and the same im
 The `worker` transcribes recordings with whisper and (optionally) summarizes with an LLM. Mount
 model files and set `WHISPER_MODEL` / `LLM_MODEL` (and `MODELS_DIR` for the mount). Without a
 whisper model, recordings are still stored — just not transcribed.
+
+## CI redeploy (spatial.lyku.co)
+
+Every push to `main` builds the app images to GHCR
+(`ghcr.io/<owner>/proximity-{server,web,worker}`) and then redeploys them on the
+droplet — no manual SSH. The `deploy` job (`.github/workflows/build.yml` →
+`deploy/ci-deploy.sh`) rsyncs the current `deploy/` config to the droplet (keeping
+its `.env`) and, for the stateless services only, runs:
+
+```bash
+IMAGE_PREFIX=ghcr.io/<owner>/ TAG=<sha> \
+  docker compose -f docker-compose.yml -f docker-compose.app.yml -f docker-compose.cfdo.yml \
+  pull server web worker && ... up -d --no-deps server web worker
+```
+
+Stateful services (postgres, redis, livekit) and the locally-built `recorder`
+(env-specific `VITE_WORLD_WS` build arg) are never touched. The compose image refs
+gained an `${IMAGE_PREFIX-}` prefix that is **empty by default**, so a local
+`docker compose ... build` / air-gapped install is unchanged; only CI sets it.
+
+### One-time setup
+
+1. **Make the GHCR packages public** so the droplet can pull without logging in:
+   for each of `proximity-server`, `proximity-web`, `proximity-worker` under the
+   org's Packages, Package settings → Change visibility → Public. (Or run the
+   droplet `docker login ghcr.io` instead and keep them private.)
+2. **Doppler**: put the droplet's deploy secrets in a config, then add its Service
+   Token as the GitHub repo secret `DOPPLER_TOKEN`. Required Doppler keys:
+   - `DEPLOY_HOST` — droplet host or IP
+   - `DEPLOY_USER` — ssh user (must be in the `docker` group)
+   - `DEPLOY_PATH` — dir on the droplet holding this repo (its `deploy/` is synced)
+   - `DEPLOY_SSH_KEY` — the private key (full PEM), whose public half is in the
+     droplet user's `authorized_keys`
+   - optional `DEPLOY_COMPOSE` / `DEPLOY_SERVICES` to override the `-f` file list
+     or which services redeploy.
+
+Without `DOPPLER_TOKEN` the `deploy` job is a no-op (forks and un-configured
+clones just build images), matching how `DIGITALOCEAN_ACCESS_TOKEN` gates the
+build step.

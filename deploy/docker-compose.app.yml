@@ -7,7 +7,7 @@ services:
     build:
       context: ..
       dockerfile: apps/server/Dockerfile
-    image: proximity-server:${TAG:-latest}
+    image: ${IMAGE_PREFIX-}proximity-server:${TAG:-latest}
     environment:
       HOST: 0.0.0.0
       PORT: 8080
@@ -37,7 +37,7 @@ services:
     build:
       context: ..
       dockerfile: apps/worker/Dockerfile
-    image: proximity-worker:${TAG:-latest}
+    image: ${IMAGE_PREFIX-}proximity-worker:${TAG:-latest}
     environment:
       PG_HOST: ${PG_HOST:-postgres}
       PG_PORT: ${PG_PORT:-5432}
@@ -61,7 +61,7 @@ services:
     build:
       context: ..
       dockerfile: apps/web/Dockerfile
-    image: proximity-web:${TAG:-latest}
+    image: ${IMAGE_PREFIX-}proximity-web:${TAG:-latest}
     restart: unless-stopped
 
   # Egress recorder template (static). Point EGRESS_TEMPLATE_URL=http://recorder at it so

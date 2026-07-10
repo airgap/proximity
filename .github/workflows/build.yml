@@ -44,3 +44,24 @@ jobs:
               -t $REG-$app:$SHA -t $REG-$app:latest \
               --push .
           done
+
+  # Redeploy the app containers on the spatial.lyku.co droplet after a main-branch
+  # build. Gated on DOPPLER_TOKEN: forks / un-configured repos skip it cleanly.
+  # SSH key + droplet host/user/path live in Doppler; nothing sensitive is in the
+  # repo. See deploy/ci-deploy.sh + deploy/DEPLOY.md ("CI redeploy").
+  deploy:
+    needs: images
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Doppler CLI
+        if: ${{ secrets.DOPPLER_TOKEN != '' }}
+        uses: dopplerhq/cli-action@v3
+      - name: Redeploy droplet
+        if: ${{ secrets.DOPPLER_TOKEN != '' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+        run: doppler run --preserve-env -- bash deploy/ci-deploy.sh
