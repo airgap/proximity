@@ -75,6 +75,8 @@ export interface ProximityGrant {
   sub: string;
   /** Display name. */
   name: string;
+  /** Optional avatar image URL (the host's account image), rendered as the character. */
+  avatar?: string;
   /** Tenant/org key for multi-tenant deployments (spaces are scoped under it). Omit for single-tenant. */
   tenant?: string;
   /** Space ids this user may join (e.g. "group:eng", "world:abc"), or ["*"] for any. */
@@ -222,6 +224,8 @@ export interface EnterMessage {
   id: string;
   name: string;
   avatarId: number;
+  /** Avatar image URL, if the peer has one. */
+  avatar?: string;
   x: number;
   y: number;
   facing: Facing;

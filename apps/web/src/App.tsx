@@ -20,21 +20,24 @@ function hostContext(): { token?: string; space: string } {
 }
 
 /**
- * The authoritative display name from the grant's `name` claim (== the user's
- * lyku.co display name). The server already stamps this on the avatar for other
- * viewers; reading it here keeps the LOCAL label consistent and lets an embedded
- * session skip the "your name" prompt entirely. No verification needed on the
- * client — the world server verifies the token; this is display only.
+ * Read display claims (name, avatar) from the grant. The world server already
+ * stamps these for other viewers; reading them here keeps the LOCAL avatar
+ * consistent and lets an embedded session skip the "your name" prompt entirely.
+ * No verification on the client — the server verifies the token; this is display
+ * only. Returns null `name` when there's no usable name (→ standalone prompt).
  */
-function grantName(token: string | undefined): string | null {
-  if (!token) return null;
+function grantClaims(token: string | undefined): { name: string | null; avatar: string | null } {
+  if (!token) return { name: null, avatar: null };
   try {
     const payload = token.split(".")[1];
-    if (!payload) return null;
-    const claims = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as { name?: unknown };
-    return typeof claims.name === "string" && claims.name.trim() ? claims.name.trim() : null;
+    if (!payload) return { name: null, avatar: null };
+    const c = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as { name?: unknown; avatar?: unknown };
+    return {
+      name: typeof c.name === "string" && c.name.trim() ? c.name.trim() : null,
+      avatar: typeof c.avatar === "string" && c.avatar ? c.avatar : null,
+    };
   } catch {
-    return null;
+    return { name: null, avatar: null };
   }
 }
 
@@ -46,15 +49,15 @@ interface ChatLine {
 
 export function App() {
   // Embedded by a host (lyku): the grant carries the identity, so skip the name
-  // prompt and always use the lyku.co name. Standalone: prompt for a name.
-  const embeddedName = grantName(hostContext().token);
-  const [joined, setJoined] = useState(embeddedName !== null);
+  // prompt and always use the lyku.co name + account image. Standalone: prompt.
+  const claims = grantClaims(hostContext().token);
+  const [joined, setJoined] = useState(claims.name !== null);
   const [name, setName] = useState("");
 
   if (!joined) {
     return <JoinScreen name={name} setName={setName} onJoin={() => setJoined(true)} />;
   }
-  return <Stage name={embeddedName ?? (name.trim() || "Guest")} />;
+  return <Stage name={claims.name ?? (name.trim() || "Guest")} avatar={claims.avatar} />;
 }
 
 function JoinScreen(props: { name: string; setName: (s: string) => void; onJoin: () => void }) {
@@ -81,7 +84,7 @@ function JoinScreen(props: { name: string; setName: (s: string) => void; onJoin:
   );
 }
 
-function Stage(props: { name: string }) {
+function Stage(props: { name: string; avatar: string | null }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<GameClient | null>(null);
   const [status, setStatus] = useState("connecting");
@@ -96,7 +99,7 @@ function Stage(props: { name: string }) {
     const el = mountRef.current;
     if (!el) return;
     const { token, space } = hostContext();
-    const game = new GameClient(wsUrl(), props.name, 0, space, token);
+    const game = new GameClient(wsUrl(), props.name, 0, space, token, props.avatar);
     gameRef.current = game;
     game.onStatus = (s) => setStatus(s);
     game.onMedia = (s) => setMedia(s);
@@ -113,7 +116,7 @@ function Stage(props: { name: string }) {
       game.destroy();
       gameRef.current = null;
     };
-  }, [props.name]);
+  }, [props.name, props.avatar]);
 
   const toggleMic = useCallback(async () => {
     const s = await gameRef.current?.toggleMic();

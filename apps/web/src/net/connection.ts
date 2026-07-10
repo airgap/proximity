@@ -41,6 +41,7 @@ export interface Remote {
   id: string;
   name: string;
   avatarId: number;
+  avatar?: string;
   samples: RemoteSample[];
   // Latest known values (used before the first snapshot arrives).
   x: number;
@@ -143,6 +144,7 @@ export class Connection {
           id: m.id,
           name: m.name,
           avatarId: m.avatarId,
+          avatar: m.avatar,
           samples: [],
           x: m.x,
           y: m.y,

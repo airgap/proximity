@@ -41,6 +41,7 @@ export interface ClientState {
   id: string; // stable user id (== LiveKit identity in phase 2)
   name: string;
   avatarId: number;
+  avatar?: string; // account image URL from the grant, rendered as the character
   ws: ProximitySocket;
   space: Space;
   observer: boolean;
@@ -140,6 +141,7 @@ export class Space {
       id: grant.sub, // authoritative identity from the grant (== LiveKit identity)
       name: (grant.name || `Guest ${nid}`).slice(0, 40),
       avatarId: avatarId | 0,
+      avatar: grant.avatar,
       ws,
       space: this,
       observer,
@@ -448,6 +450,7 @@ export class Space {
           id: o.id,
           name: o.name,
           avatarId: o.avatarId,
+          avatar: o.avatar,
           x: o.x,
           y: o.y,
           facing: o.facing,

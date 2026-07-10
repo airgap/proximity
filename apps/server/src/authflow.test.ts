@@ -45,8 +45,8 @@ function connect() {
   };
 }
 
-async function grantToken(spaces: string[], caps: string[]) {
-  return signGrant({ sub: "u_1", name: "Nicole", tenant: "org_7", spaces, caps: caps as any }, SECRET);
+async function grantToken(spaces: string[], caps: string[], extra: { sub?: string; avatar?: string } = {}) {
+  return signGrant({ sub: extra.sub ?? "u_1", name: "Nicole", tenant: "org_7", spaces, caps: caps as any, avatar: extra.avatar }, SECRET);
 }
 
 test("valid grant joins an allowed space", async () => {
@@ -95,4 +95,27 @@ test("capabilities are enforced: no 'present' cap => cannot present", async () =
   expect(viewer.events.some((e) => e.t === "presentationState" && e.active)).toBe(false);
   viewer.ws.close();
   presenter.ws.close();
+});
+
+test("the grant's avatar URL is delivered to peers via `enter`", async () => {
+  const AV = "https://api.lyku.co/avatar/42?v=1";
+  const withAvatar = await grantToken(["group:eng"], ["join"], { sub: "u_av", avatar: AV });
+  const plain = await grantToken(["group:eng"], ["join"], { sub: "u_peer" });
+  const a = connect();
+  const b = connect();
+  await Promise.all([a.opened, b.opened]);
+  a.send({ t: "join", spaceId: "group:eng", name: "A", avatarId: 0, token: withAvatar });
+  await wait(120);
+  b.send({ t: "join", spaceId: "group:eng", name: "B", avatarId: 0, token: plain });
+  await wait(250);
+  // b should see a's enter, carrying a's account image URL.
+  const enterA = b.events.find((e) => e.t === "enter" && e.id === "u_av");
+  expect(enterA).toBeTruthy();
+  expect(enterA.avatar).toBe(AV);
+  // a should see b's enter WITHOUT an avatar (b has none).
+  const enterB = a.events.find((e) => e.t === "enter" && e.id === "u_peer");
+  expect(enterB).toBeTruthy();
+  expect(enterB.avatar).toBeUndefined();
+  a.ws.close();
+  b.ws.close();
 });

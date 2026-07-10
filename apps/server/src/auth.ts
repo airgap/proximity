@@ -44,6 +44,7 @@ function payloadToGrant(
   return {
     sub: String(p.sub),
     name: String(p.name ?? p.email ?? p.sub),
+    avatar: p.avatar ? String(p.avatar) : undefined,
     tenant: opts.tenantClaim
       ? p[opts.tenantClaim]
         ? String(p[opts.tenantClaim])
@@ -213,6 +214,7 @@ export async function signGrant(
 ): Promise<string> {
   return new SignJWT({
     name: grant.name,
+    ...(grant.avatar ? { avatar: grant.avatar } : {}),
     tenant: grant.tenant,
     spaces: grant.spaces,
     caps: grant.caps,

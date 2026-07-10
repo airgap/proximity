@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Text } from "pixi.js";
+import { Application, Assets, Container, Graphics, Sprite, Text, type Texture } from "pixi.js";
 import { Facing, isBlocked, unpackCollision } from "@proximity/protocol";
 import { Connection, type PresentationState, type Remote } from "../net/connection.ts";
 import { Input } from "./input.ts";
@@ -81,9 +81,11 @@ export class GameClient {
   onMedia?: (s: MediaState) => void;
   onPresentation?: (s: PresentationUiState) => void;
   readonly displayName: string;
+  private readonly selfAvatar: string | null;
 
-  constructor(url: string, name: string, avatarId: number, spaceId = "default", token?: string) {
+  constructor(url: string, name: string, avatarId: number, spaceId = "default", token?: string, selfAvatar: string | null = null) {
     this.displayName = name;
+    this.selfAvatar = selfAvatar;
     this.conn = new Connection(url, name, avatarId, spaceId, token);
     this.conn.onWelcome = () => this.onWelcome();
     this.conn.onCorrection = (x, y, f) => {
@@ -192,7 +194,7 @@ export class GameClient {
     this.self.facing = this.conn.spawn.facing;
 
     this.drawMap();
-    this.selfView = this.makeAvatar(this.displayName, colorFor(this.conn.selfId), true);
+    this.selfView = this.makeAvatar(this.displayName, colorFor(this.conn.selfId), true, this.selfAvatar);
     this.world.addChild(this.selfView.container);
 
     if (this.conn.livekit) this.connectMedia(this.conn.livekit);
@@ -345,19 +347,42 @@ export class GameClient {
     this.world.addChildAt(g, 0);
   }
 
-  private makeAvatar(name: string, color: number, isSelf: boolean): AvatarView {
+  private makeAvatar(name: string, color: number, isSelf: boolean, avatarUrl?: string | null): AvatarView {
     const container = new Container();
     const r = this.tileSize * 0.4;
+    // Colored disc: the fallback, and what shows while an image loads.
     const g = new Graphics();
     g.circle(0, 0, r).fill(color);
     g.circle(0, 0, r).stroke({ width: 2, color: isSelf ? 0xffffff : 0x000000, alpha: 0.6 });
+    container.addChild(g);
+
+    // Account image, if any: a circular-clipped sprite laid over the disc. Loaded
+    // async; the disc stays as a placeholder and remains if the load fails.
+    if (avatarUrl) {
+      void Assets.load(avatarUrl)
+        .then((texture: Texture) => {
+          if (container.destroyed) return;
+          const sprite = new Sprite(texture);
+          sprite.anchor.set(0.5);
+          const d = r * 2;
+          sprite.width = d;
+          sprite.height = d;
+          const mask = new Graphics().circle(0, 0, r).fill(0xffffff);
+          sprite.mask = mask;
+          container.addChild(sprite);
+          container.addChild(mask);
+        })
+        .catch(() => {
+          /* keep the colored disc */
+        });
+    }
+
     const label = new Text({
       text: name,
       style: { fill: 0xffffff, fontSize: 12, fontFamily: "ui-sans-serif, system-ui, sans-serif" },
     });
     label.anchor.set(0.5, 1);
     label.y = -r - 3;
-    container.addChild(g);
     container.addChild(label);
     return { container, label };
   }
@@ -433,7 +458,7 @@ export class GameClient {
     for (const [nid, r] of this.conn.remotes) {
       let view = this.avatars.get(nid);
       if (!view) {
-        view = this.makeAvatar(r.name, colorFor(r.id), false);
+        view = this.makeAvatar(r.name, colorFor(r.id), false, r.avatar);
         this.avatars.set(nid, view);
         this.world.addChild(view.container);
       }
