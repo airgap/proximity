@@ -18,6 +18,12 @@ const INTERP_DELAY = 100;
 const MOVE_SEND_INTERVAL = 100;
 /** Avatar collision half-extent in tiles (keeps the body out of walls). */
 const BODY_RADIUS = 0.35;
+/** Velocity smoothing: 1/s. Higher = snappier accel + stop. ~25 ≈ 90% in 90ms. */
+const SMOOTH_RATE = 25;
+/** Below this speed (tiles/s) with no input, snap to a full stop. */
+const STOP_EPSILON = 0.05;
+/** Above this speed (tiles/s), the avatar is "moving" (drives the walk state). */
+const MOVING_EPSILON = 0.06;
 
 interface AvatarView {
   container: Container;
@@ -38,6 +44,10 @@ export class GameClient {
   private readonly input = new Input();
 
   private readonly self = { x: 0, y: 0, facing: Facing.Down as number, moving: false };
+  // Smoothed velocity (tiles/sec). The avatar accelerates toward the input intent
+  // and coasts to a stop, instead of snapping to full speed and dead-stopping —
+  // that momentum is what makes movement feel natural.
+  private readonly vel = { x: 0, y: 0 };
   private collision = new Uint8Array(0);
   private tileSize = 32;
   private mapW = 0;
@@ -80,6 +90,9 @@ export class GameClient {
       this.self.x = x;
       this.self.y = y;
       this.self.facing = f;
+      // Snap velocity to zero so prediction doesn't fight the server correction.
+      this.vel.x = 0;
+      this.vel.y = 0;
     };
     this.conn.onChat = (n, b) => this.onChat?.(n, b);
     this.conn.onChatHistory = (msgs) => this.onChatHistory?.(msgs);
@@ -354,23 +367,40 @@ export class GameClient {
     if (!cfg || !this.selfView) return;
     const ts = this.tileSize;
 
-    // --- Self: input-driven prediction with per-axis local collision (wall sliding) ---
+    // --- Self: momentum-smoothed prediction with per-axis local collision (wall sliding) ---
+    const dt = dtMs / 1000;
     const { dx, dy } = this.input.axis();
+    // Target velocity = normalized input intent at max speed (0 when no keys).
+    const len = Math.hypot(dx, dy);
+    const targetX = len ? (dx / len) * cfg.maxSpeed : 0;
+    const targetY = len ? (dy / len) * cfg.maxSpeed : 0;
+    // Exponential ease toward the target — same responsiveness accelerating and
+    // stopping, frame-rate independent. ~0.09s to close 90% of the gap.
+    const ease = 1 - Math.exp(-SMOOTH_RATE * dt);
+    this.vel.x += (targetX - this.vel.x) * ease;
+    this.vel.y += (targetY - this.vel.y) * ease;
+    // Kill sub-pixel drift once input is released and we've nearly stopped.
+    if (len === 0 && Math.hypot(this.vel.x, this.vel.y) < STOP_EPSILON) {
+      this.vel.x = 0;
+      this.vel.y = 0;
+    }
+    const nx = this.self.x + this.vel.x * dt;
+    const ny = this.self.y + this.vel.y * dt;
+    if (this.blocked(nx, this.self.y)) this.vel.x = 0;
+    else this.self.x = nx;
+    if (this.blocked(this.self.x, ny)) this.vel.y = 0;
+    else this.self.y = ny;
+
+    const speed = Math.hypot(this.vel.x, this.vel.y);
+    const moving = speed > MOVING_EPSILON;
     let facing = this.self.facing;
-    const moving = dx !== 0 || dy !== 0;
     if (moving) {
-      const len = Math.hypot(dx, dy) || 1;
-      const dist = cfg.maxSpeed * (dtMs / 1000);
-      const nx = this.self.x + (dx / len) * dist;
-      const ny = this.self.y + (dy / len) * dist;
-      if (!this.blocked(nx, this.self.y)) this.self.x = nx;
-      if (!this.blocked(this.self.x, ny)) this.self.y = ny;
       facing =
-        Math.abs(dx) > Math.abs(dy)
-          ? dx < 0
+        Math.abs(this.vel.x) > Math.abs(this.vel.y)
+          ? this.vel.x < 0
             ? Facing.Left
             : Facing.Right
-          : dy < 0
+          : this.vel.y < 0
             ? Facing.Up
             : Facing.Down;
     }

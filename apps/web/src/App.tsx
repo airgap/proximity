@@ -19,6 +19,25 @@ function hostContext(): { token?: string; space: string } {
   };
 }
 
+/**
+ * The authoritative display name from the grant's `name` claim (== the user's
+ * lyku.co display name). The server already stamps this on the avatar for other
+ * viewers; reading it here keeps the LOCAL label consistent and lets an embedded
+ * session skip the "your name" prompt entirely. No verification needed on the
+ * client — the world server verifies the token; this is display only.
+ */
+function grantName(token: string | undefined): string | null {
+  if (!token) return null;
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const claims = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as { name?: unknown };
+    return typeof claims.name === "string" && claims.name.trim() ? claims.name.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 interface ChatLine {
   name: string;
   body: string;
@@ -26,13 +45,16 @@ interface ChatLine {
 }
 
 export function App() {
-  const [joined, setJoined] = useState(false);
+  // Embedded by a host (lyku): the grant carries the identity, so skip the name
+  // prompt and always use the lyku.co name. Standalone: prompt for a name.
+  const embeddedName = grantName(hostContext().token);
+  const [joined, setJoined] = useState(embeddedName !== null);
   const [name, setName] = useState("");
 
   if (!joined) {
     return <JoinScreen name={name} setName={setName} onJoin={() => setJoined(true)} />;
   }
-  return <Stage name={name.trim() || "Guest"} />;
+  return <Stage name={embeddedName ?? (name.trim() || "Guest")} />;
 }
 
 function JoinScreen(props: { name: string; setName: (s: string) => void; onJoin: () => void }) {
