@@ -3,7 +3,7 @@
 #
 # Models (whisper ggml / LLM gguf) are NOT baked in — mount them and point WHISPER_MODEL /
 # LLM_MODEL at the mounted paths. For GPU transcode/inference, run with docker-compose.gpu.yml.
-FROM registry.digitalocean.com/parabun/parabun:latest
+FROM ghcr.io/airgap/parabun:latest
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
 COPY packages ./packages

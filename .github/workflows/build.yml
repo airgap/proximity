@@ -5,8 +5,9 @@ on:
     branches: [main]
     tags: ["v*"]
 
-# Builds multi-arch app images and pushes to GHCR. The Parabun base lives in DO's registry;
-# provide DIGITALOCEAN_ACCESS_TOKEN to pull it. Skips gracefully if the secret is absent.
+# Builds multi-arch app images and pushes to GHCR. The Parabun base is public
+# (ghcr.io/airgap/parabun), so the build needs no registry credentials beyond the
+# built-in GITHUB_TOKEN for pushing to GHCR.
 jobs:
   images:
     runs-on: ubuntu-latest
@@ -24,16 +25,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to DigitalOcean registry (for the Parabun base image)
-        if: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN != '' }}
-        uses: docker/login-action@v3
-        with:
-          registry: registry.digitalocean.com
-          username: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-          password: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-
       - name: Build & push app images
-        if: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN != '' }}
         run: |
           set -e
           REG=ghcr.io/${{ github.repository }}

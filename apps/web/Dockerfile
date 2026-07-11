@@ -1,6 +1,6 @@
 # Proximity web client — build the static SPA, serve with nginx.
 # Build context = repo root:  docker build -f apps/web/Dockerfile -t proximity-web .
-FROM registry.digitalocean.com/parabun/parabun:latest AS build
+FROM ghcr.io/airgap/parabun:latest AS build
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml tsconfig.base.json ./
 COPY packages ./packages

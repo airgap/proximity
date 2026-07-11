@@ -1,6 +1,6 @@
 # Proximity world-server. Build context = repo root:
 #   docker build -f apps/server/Dockerfile -t proximity-server .
-FROM registry.digitalocean.com/parabun/parabun:latest
+FROM ghcr.io/airgap/parabun:latest
 WORKDIR /app
 # Workspace manifests (all members must be present for the workspace install to resolve).
 COPY package.json bun.lock bunfig.toml ./

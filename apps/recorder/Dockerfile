@@ -1,7 +1,7 @@
 # Proximity egress recorder template — static page loaded by LiveKit Egress (headless Chrome).
 # Build context = repo root:  docker build -f apps/recorder/Dockerfile -t proximity-recorder .
 # Set VITE_WORLD_WS at build time to the world-server WS URL reachable from the egress container.
-FROM registry.digitalocean.com/parabun/parabun:latest AS build
+FROM ghcr.io/airgap/parabun:latest AS build
 WORKDIR /app
 ARG VITE_WORLD_WS
 ENV VITE_WORLD_WS=${VITE_WORLD_WS}
