@@ -24,7 +24,8 @@ trap 'rm -f "$key" "$known"' EXIT
 printf '%s\n' "$API_SSH_KEY" > "$key"; chmod 600 "$key"
 
 echo "[deploy] redeploying web + world-server on ${API_USER}@droplet…"
-ssh -i "$key" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known" \
+ssh -i "$key" -o IdentitiesOnly=yes -o IdentityAgent=none \
+    -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known" \
     -o ConnectTimeout=20 "$API_USER@$API_IP" 'bash -s' <<'REMOTE'
 set -euo pipefail
 services="web world-server"
