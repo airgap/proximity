@@ -37,6 +37,8 @@ pipeline {
                     extensions: [[$class: 'CloneOption', shallow: true, depth: 1]],
                     userRemoteConfigs: scm.userRemoteConfigs])
                 script { env.SHORT_SHA = sh(script: 'git rev-parse --short=12 HEAD', returnStdout: true).trim() }
+                // The Deploy stage runs on the controller (see below); hand it the deploy dir.
+                stash includes: 'deploy/**', name: 'deploydir'
             }
         }
 
@@ -97,8 +99,14 @@ pipeline {
             }
         }
 
+        // Runs on the controller, not the docker agent: `ssh` needs getpwuid() to
+        // resolve the local user, which fails inside the container (the host jenkins
+        // uid has no passwd entry there → "No user exists for uid"). On built-in the
+        // jenkins user is real, so ssh works. doppler + jenkins-doppler live here too.
         stage('Deploy droplet') {
+            agent { label 'built-in' }
             steps {
+                unstash 'deploydir'
                 sh '''
                     set -eu
                     set +x
