@@ -1,44 +1,51 @@
 #!/usr/bin/env bash
-# CI redeploy of the app containers on the spatial.lyku.co droplet. Run from CI
-# under `doppler run` so the secrets below arrive in the environment. Redeploys
-# ONLY the stateless app services (server, web, worker) from GHCR — never the
-# stateful ones (postgres, redis, livekit) or the locally-built recorder.
+# CI redeploy of the proximity APP containers on the spatial.lyku.co droplet.
+# Runs from GitHub Actions under `doppler run` (a ci/prd service token supplies
+# the secrets below). Redeploys ONLY the stateless app services by pulling the
+# :latest images pinned in the droplet's own docker-compose.co.yml, then
+# recreating them. Never touches the stateful services (postgres, redis,
+# livekit) or the locally-built recorder, and never rewrites the droplet's
+# compose files or .env.
 #
-# Required env (from Doppler):
-#   DEPLOY_HOST      droplet host/IP
-#   DEPLOY_USER      ssh user
-#   DEPLOY_PATH      dir on the droplet holding the repo (its deploy/ is synced)
-#   DEPLOY_SSH_KEY   private key (full PEM)
-# From the workflow: OWNER (github org), SHA (commit). Optional: DEPLOY_COMPOSE
-# (override the -f list), DEPLOY_SERVICES (override which services redeploy).
+# Required env (Doppler project ci / config prd):
+#   API_IP        droplet host/IP
+#   API_USER      ssh user
+#   API_SSH_KEY   private key (full PEM)
+#
+# Prereq: the droplet's docker-compose.co.yml must pin web + world-server to the
+# registry CI pushes to (public GHCR: ghcr.io/airgap/proximity-{web,server}).
+# See DEPLOY.md ("CI redeploy") for the one-time DOCR->GHCR cutover.
 set -euo pipefail
 
-: "${DEPLOY_HOST:?}" "${DEPLOY_USER:?}" "${DEPLOY_PATH:?}" "${DEPLOY_SSH_KEY:?}" "${OWNER:?}" "${SHA:?}"
+: "${API_IP:?}" "${API_USER:?}" "${API_SSH_KEY:?}"
 
 key="$(mktemp)"; known="$(mktemp)"
 trap 'rm -f "$key" "$known"' EXIT
-printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"; chmod 600 "$key"
-ssh_opts=(-i "$key" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known")
+printf '%s\n' "$API_SSH_KEY" > "$key"; chmod 600 "$key"
 
-prefix="ghcr.io/${OWNER}/"
-tag="${SHA:0:12}"
-compose="${DEPLOY_COMPOSE:-docker compose -f docker-compose.yml -f docker-compose.app.yml -f docker-compose.cfdo.yml}"
-services="${DEPLOY_SERVICES:-server web worker}"
-
-echo "[deploy] syncing deploy/ to ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/deploy (keeping the droplet's .env)"
-rsync -az --delete -e "ssh ${ssh_opts[*]}" \
-  --exclude='.env' --exclude='*.local.*' \
-  deploy/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/deploy/"
-
-echo "[deploy] pulling + restarting: ${services} (image ${prefix}proximity-web:${tag})"
-ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<REMOTE
+echo "[deploy] redeploying web + world-server on ${API_USER}@droplet…"
+ssh -i "$key" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known" \
+    -o ConnectTimeout=20 "$API_USER@$API_IP" 'bash -s' <<'REMOTE'
 set -euo pipefail
-cd "${DEPLOY_PATH}/deploy"
-export IMAGE_PREFIX="${prefix}" TAG="${tag}"
-${compose} pull ${services}
-${compose} up -d --no-deps ${services}
+services="web world-server"
+
+# Derive the exact compose invocation the droplet already uses, from the running
+# web container's labels — no hard-coded paths, no compose-file drift.
+cid="$(docker ps -q --filter label=com.docker.compose.service=web | head -1)"
+[ -n "$cid" ] || { echo "[deploy] ERROR: no running 'web' container to derive compose config from"; exit 3; }
+wd="$(docker inspect "$cid" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}')"
+cf="$(docker inspect "$cid" --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}')"
+cd "$wd"
+flags=""; IFS=','; for f in $cf; do flags="$flags -f $f"; done; unset IFS
+echo "[deploy] dir=$wd  services=$services"
+
+# shellcheck disable=SC2086
+docker compose $flags pull $services
+# shellcheck disable=SC2086
+docker compose $flags up -d --no-deps $services
 docker image prune -f >/dev/null 2>&1 || true
 echo "[deploy] running images:"
-${compose} images ${services}
+# shellcheck disable=SC2086
+docker compose $flags ps $services
 REMOTE
-echo "[deploy] done."
+echo "[deploy] finished."

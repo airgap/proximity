@@ -47,8 +47,10 @@ jobs:
 
   # Redeploy the app containers on the spatial.lyku.co droplet after a main-branch
   # build. Gated on DOPPLER_TOKEN: forks / un-configured repos skip it cleanly.
-  # SSH key + droplet host/user/path live in Doppler; nothing sensitive is in the
-  # repo. See deploy/ci-deploy.sh + deploy/DEPLOY.md ("CI redeploy").
+  # Droplet host/user + SSH key live in Doppler (project ci / config prd) as
+  # API_IP / API_USER / API_SSH_KEY; nothing sensitive is in the repo. The
+  # droplet pulls the app images CI pushes here (public GHCR). See
+  # deploy/ci-deploy.sh + deploy/DEPLOY.md ("CI redeploy").
   deploy:
     needs: images
     if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
@@ -58,10 +60,8 @@ jobs:
       - name: Install Doppler CLI
         if: ${{ secrets.DOPPLER_TOKEN != '' }}
         uses: dopplerhq/cli-action@v3
-      - name: Redeploy droplet
+      - name: Redeploy droplet (pull :latest, restart web + world-server)
         if: ${{ secrets.DOPPLER_TOKEN != '' }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          OWNER: ${{ github.repository_owner }}
-          SHA: ${{ github.sha }}
-        run: doppler run --preserve-env -- bash deploy/ci-deploy.sh
+        run: doppler run -- bash deploy/ci-deploy.sh

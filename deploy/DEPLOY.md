@@ -81,39 +81,53 @@ whisper model, recordings are still stored — just not transcribed.
 
 ## CI redeploy (spatial.lyku.co)
 
-Every push to `main` builds the app images to GHCR
-(`ghcr.io/<owner>/proximity-{server,web,worker}`) and then redeploys them on the
-droplet — no manual SSH. The `deploy` job (`.github/workflows/build.yml` →
-`deploy/ci-deploy.sh`) rsyncs the current `deploy/` config to the droplet (keeping
-its `.env`) and, for the stateless services only, runs:
+Every push to `main` builds the app images to public GHCR
+(`ghcr.io/<owner>/proximity-{server,web,worker}`) and then redeploys the app
+containers on the droplet — no manual SSH. The `deploy` job
+(`.github/workflows/build.yml` → `deploy/ci-deploy.sh`) SSHes in, derives the
+compose invocation from the running `web` container's own labels (so it always
+matches how the box is actually run, including the droplet-only
+`docker-compose.co.yml` overlay), and for the stateless services only runs:
 
 ```bash
-IMAGE_PREFIX=ghcr.io/<owner>/ TAG=<sha> \
-  docker compose -f docker-compose.yml -f docker-compose.app.yml -f docker-compose.cfdo.yml \
-  pull server web worker && ... up -d --no-deps server web worker
+docker compose <the droplet's -f list> pull web world-server
+docker compose <the droplet's -f list> up -d --no-deps web world-server
 ```
 
-Stateful services (postgres, redis, livekit) and the locally-built `recorder`
-(env-specific `VITE_WORLD_WS` build arg) are never touched. The compose image refs
-gained an `${IMAGE_PREFIX-}` prefix that is **empty by default**, so a local
-`docker compose ... build` / air-gapped install is unchanged; only CI sets it.
+It never rsyncs over or rewrites the droplet's compose files or `.env`, and never
+touches the stateful services (postgres, redis, livekit) or the locally-built
+`recorder`. The images it pulls are whatever the droplet's `docker-compose.co.yml`
+pins `web` + `world-server` to — see the cutover below.
 
 ### One-time setup
 
-1. **Make the GHCR packages public** so the droplet can pull without logging in:
-   for each of `proximity-server`, `proximity-web`, `proximity-worker` under the
-   org's Packages, Package settings → Change visibility → Public. (Or run the
-   droplet `docker login ghcr.io` instead and keep them private.)
-2. **Doppler**: put the droplet's deploy secrets in a config, then add its Service
-   Token as the GitHub repo secret `DOPPLER_TOKEN`. Required Doppler keys:
-   - `DEPLOY_HOST` — droplet host or IP
-   - `DEPLOY_USER` — ssh user (must be in the `docker` group)
-   - `DEPLOY_PATH` — dir on the droplet holding this repo (its `deploy/` is synced)
-   - `DEPLOY_SSH_KEY` — the private key (full PEM), whose public half is in the
+1. **Registry auth for the build.** The app Dockerfiles build `FROM
+   registry.digitalocean.com/parabun/parabun`, so CI needs
+   `DIGITALOCEAN_ACCESS_TOKEN` (repo secret) to pull the base image. Without it
+   the whole `images` job's push step is skipped and no images are published.
+2. **Make the GHCR packages public** so the droplet can pull without logging in:
+   for each of `proximity-web`, `proximity-server` (and `proximity-worker` if you
+   deploy it elsewhere) under the owner's Packages → Package settings → Change
+   visibility → Public. (Packages only exist after the first successful build.)
+3. **Point the droplet at GHCR (DOCR→GHCR cutover).** The live droplet historically
+   pulled `registry.digitalocean.com/lyku/proximity-{web,server}:latest`. Once the
+   public GHCR images exist (steps 1–2), edit the droplet's
+   `/opt/proximity/deploy/docker-compose.co.yml` so `web.image` and
+   `world-server.image` are `ghcr.io/<owner>/proximity-{web,server}:latest`
+   (keep `pull_policy: always`), then `docker compose … pull web world-server &&
+   … up -d --no-deps web world-server` once by hand to confirm the pull works.
+   Do **not** do this before the GHCR images are public — a restart would fail to
+   pull and take the app down.
+4. **Doppler deploy secrets.** In project `ci` / config `prd`, set:
+   - `API_IP` — droplet host or IP
+   - `API_USER` — ssh user (must be in the `docker` group)
+   - `API_SSH_KEY` — the private key (full PEM), whose public half is in the
      droplet user's `authorized_keys`
-   - optional `DEPLOY_COMPOSE` / `DEPLOY_SERVICES` to override the `-f` file list
-     or which services redeploy.
+
+   Then add a Service Token for `ci`/`prd` as the GitHub repo secret
+   `DOPPLER_TOKEN`.
 
 Without `DOPPLER_TOKEN` the `deploy` job is a no-op (forks and un-configured
 clones just build images), matching how `DIGITALOCEAN_ACCESS_TOKEN` gates the
-build step.
+build step. Until the step-3 cutover is done, the `deploy` job would pull the
+droplet's still-DOCR `:latest`, so complete the cutover before relying on CI.
