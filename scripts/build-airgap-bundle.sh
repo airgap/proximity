@@ -22,7 +22,7 @@ IMAGES=(
   "postgres:16-alpine"
   "redis:7-alpine"
   "minio/minio:latest"
-  "registry.digitalocean.com/parabun/parabun:latest"
+  "ghcr.io/airgap/parabun:latest"
 )
 
 echo "[airgap] saving ${#IMAGES[@]} images (this is large)…"
