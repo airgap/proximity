@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CI redeploy of the proximity APP containers on the spatial.lyku.co droplet.
-# Runs from GitHub Actions under `doppler run` (a ci/prd service token supplies
-# the secrets below). Redeploys ONLY the stateless app services by pulling the
+# Called by the proximity Jenkins job's Deploy stage under `doppler run` (a ci/prd
+# service token supplies the secrets below). Redeploys ONLY the stateless app services by pulling the
 # :latest images pinned in the droplet's own docker-compose.co.yml, then
 # recreating them. Never touches the stateful services (postgres, redis,
 # livekit) or the locally-built recorder, and never rewrites the droplet's
