@@ -79,6 +79,14 @@ outside this repository. Already processed recordings predate the outbox and are
 not automatically backfilled; recovering those notes needs a separate reviewed
 replay plan using their existing stored artifacts.
 
+**Before scaling recording processing:** run one recording-processing worker.
+The poll loop prevents overlap within one process, but the existing selection of
+`complete` recordings does not claim them across workers. Concurrent processors
+can overwrite the same S3 transcript/note keys while the outbox retains the first
+accepted payload and metadata. Add recording-level claims or immutable artifact
+keys before scaling processing across workers. Outbox delivery leases alone do
+not resolve this existing artifact race.
+
 Focused tests (no network/model/services):
 
 ```sh
