@@ -22,8 +22,11 @@ export class PgNoteOutbox {
       WITH queued AS (
         INSERT INTO note_deliveries (egress_id, payload)
         VALUES (${egressId}, ${body}) ON CONFLICT (egress_id) DO NOTHING
+        RETURNING egress_id
       )
-      UPDATE recordings SET status='processed', transcript_key=${transcriptKey}, summary=${summary}
+      UPDATE recordings SET status='processed',
+        transcript_key=CASE WHEN EXISTS (SELECT 1 FROM queued) THEN ${transcriptKey} ELSE transcript_key END,
+        summary=CASE WHEN EXISTS (SELECT 1 FROM queued) THEN ${summary} ELSE summary END
       WHERE egress_id=${egressId}
     `;
   }
@@ -77,7 +80,7 @@ export async function hmacHex(body: string, secret: string): Promise<string> {
 }
 
 export async function postNote(row: Delivery, url: string, secret?: string,
-  fetcher: typeof fetch = fetch, timeoutMs = REQUEST_TIMEOUT_MS): Promise<void> {
+  fetcher: (url: string, init: RequestInit) => Promise<Response> = fetch, timeoutMs = REQUEST_TIMEOUT_MS): Promise<void> {
   const headers: Record<string, string> = {
     "content-type": "application/json", "idempotency-key": `proximity-note:${row.egress_id}`,
   };

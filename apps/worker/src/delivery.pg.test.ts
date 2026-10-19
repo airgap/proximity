@@ -26,9 +26,12 @@ integration("Postgres outbox: atomic enqueue, concurrent leases, restart recover
     expect((await db`SELECT * FROM note_deliveries`).length).toBe(0);
     await db.unsafe("DROP TRIGGER reject_note ON note_deliveries; DROP FUNCTION reject_note()");
     await outbox.enqueue("fixture", { note: "fixture" }, "vtt", "summary");
-    await outbox.enqueue("fixture", { note: "changed duplicate" }, "vtt", "summary");
+    await outbox.enqueue("fixture", { note: "changed duplicate" }, "changed-vtt", "changed-summary");
     expect((await db`SELECT status FROM recordings WHERE egress_id='fixture'`)[0].status).toBe("processed");
     expect((await db`SELECT payload FROM note_deliveries`)[0].payload).toBe('{"note":"fixture"}');
+    const recording = (await db`SELECT transcript_key,summary FROM recordings WHERE egress_id='fixture'`)[0];
+    expect(recording.transcript_key).toBe("vtt");
+    expect(recording.summary).toBe("summary");
     const claims = (await Promise.all([outbox.claim(), outbox.claim()])).filter(x => x !== undefined);
     expect(claims.length).toBe(1);
     const crashed = claims[0]!;

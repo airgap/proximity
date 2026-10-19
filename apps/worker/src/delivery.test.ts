@@ -5,7 +5,7 @@ const row: Delivery = { egress_id: "synthetic-egress", payload: JSON.stringify({
 
 test("signed successful delivery keeps stable identity and exact persisted bytes", async () => {
   let captured: RequestInit | undefined;
-  const fetcher = (async (_url, init) => { captured = init; return new Response("ok"); }) as typeof fetch;
+  const fetcher = async (_url: string, init: RequestInit) => { captured = init; return new Response("ok"); };
   await postNote(row, "https://receiver.invalid/notes", "fixture-secret", fetcher);
   expect(captured?.body).toBe(row.payload);
   const headers = captured?.headers as Record<string, string>;
@@ -15,15 +15,15 @@ test("signed successful delivery keeps stable identity and exact persisted bytes
 
 for (const status of [400, 401, 429, 500, 503]) test(`HTTP ${status} fails delivery`, async () => {
   await expect(postNote(row, "https://receiver.invalid", undefined,
-    (async () => new Response("untrusted body", { status })) as typeof fetch)).rejects.toThrow(`HTTP ${status}`);
+    async () => new Response("untrusted body", { status }))).rejects.toThrow(`HTTP ${status}`);
 });
 
 test("network failure and timeout reject instead of acknowledging", async () => {
   await expect(postNote(row, "https://receiver.invalid", undefined,
-    (async () => { throw new TypeError("offline"); }) as typeof fetch)).rejects.toThrow("offline");
-  const hanging = ((_url: unknown, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    async () => { throw new TypeError("offline"); })).rejects.toThrow("offline");
+  const hanging = (_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
     init.signal!.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
-  })) as typeof fetch;
+  });
   await expect(postNote(row, "https://receiver.invalid", undefined, hanging, 5)).rejects.toThrow();
 });
 
