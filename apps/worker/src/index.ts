@@ -2,6 +2,7 @@ import { S3Client, SQL } from "bun";
 import { loadServerEnv } from "@proximity/config";
 import { toVtt, transcribeRecording } from "./transcribe.ts";
 import { generateNote, noteToMarkdown } from "./notetaker.ts";
+import { PgNoteOutbox, drainNotes } from "./delivery.ts";
 
 /**
  * Recording post-processing worker.
@@ -33,32 +34,7 @@ const s3 = new S3Client({
   region: env.S3_REGION,
 });
 
-async function hmacHex(body: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)));
-  return [...sig].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-/** POST the generated note to the host's receiver (lyku channel bot, on-prem sink, …), signed. */
-async function postNote(payload: unknown): Promise<void> {
-  if (!env.NOTETAKER_WEBHOOK_URL) return;
-  try {
-    const body = JSON.stringify(payload);
-    const headers: Record<string, string> = { "content-type": "application/json" };
-    if (env.PROXIMITY_GRANT_SECRET) {
-      headers["x-proximity-signature"] = await hmacHex(body, env.PROXIMITY_GRANT_SECRET);
-    }
-    await fetch(env.NOTETAKER_WEBHOOK_URL, { method: "POST", headers, body });
-  } catch (err) {
-    console.error("[worker] notetaker webhook failed:", err);
-  }
-}
+const outbox = new PgNoteOutbox(sql);
 
 interface Row {
   egress_id: string;
@@ -75,6 +51,7 @@ async function processOne(row: Row): Promise<void> {
     await sql`UPDATE recordings SET status='processed' WHERE egress_id=${egress_id}`;
     return;
   }
+  let artifactsReady = false;
   try {
     const bytes = new Uint8Array(await s3.file(s3_video_key).arrayBuffer());
     const text = await transcribeRecording(bytes, env.WHISPER_MODEL);
@@ -88,22 +65,24 @@ async function processOne(row: Row): Promise<void> {
     const notesKey = `${base}.notes.md`;
     await s3.write(notesKey, noteToMarkdown(note, { spaceId: space_id ?? undefined, transcriptRef: transcriptKey }));
 
-    await sql`
-      UPDATE recordings
-      SET status='processed', transcript_key=${transcriptKey}, summary=${note.summary}
-      WHERE egress_id=${egress_id}
-    `;
-    await postNote({ egressId: egress_id, spaceId: space_id, presenterId: presenter_id, note, transcriptKey, notesKey });
+    artifactsReady = true;
+    await outbox.enqueue(egress_id,
+      { deliveryId: `proximity-note:${egress_id}`, egressId: egress_id, spaceId: space_id,
+        presenterId: presenter_id, note, transcriptKey, notesKey }, transcriptKey, note.summary);
     console.log(
       `[worker] processed ${egress_id}: ${text.length} chars, ${note.actionItems.length} action item(s) [${note.engine}] -> ${notesKey}`,
     );
   } catch (err) {
     console.error(`[worker] failed ${egress_id}:`, err);
+    // If outbox persistence fails, keep the recording retryable. The atomic enqueue
+    // either committed (processed + queued) or left it complete for the next poll.
+    if (artifactsReady) throw err;
     await sql`UPDATE recordings SET status='process_failed' WHERE egress_id=${egress_id}`;
   }
 }
 
 async function tick(): Promise<void> {
+  await drainNotes(outbox, env.NOTETAKER_WEBHOOK_URL, env.PROXIMITY_GRANT_SECRET);
   const rows = (await sql`
     SELECT egress_id, space_id, presenter_id, s3_video_key, duration_ms
     FROM recordings
@@ -112,6 +91,7 @@ async function tick(): Promise<void> {
     LIMIT 3
   `) as Row[];
   for (const row of rows) await processOne(row);
+  await drainNotes(outbox, env.NOTETAKER_WEBHOOK_URL, env.PROXIMITY_GRANT_SECRET);
 }
 
 console.log(
@@ -119,5 +99,10 @@ console.log(
     (env.WHISPER_MODEL ? ` (whisper: ${env.WHISPER_MODEL})` : " (no whisper model; transcription disabled)") +
     ` (notetaker: ${env.LLM_MODEL ? "llm" : "extractive"}${env.NOTETAKER_WEBHOOK_URL ? " ->webhook" : ""})`,
 );
-await tick();
-setInterval(() => void tick(), env.WORKER_POLL_MS);
+// Schedule after completion so a slow transcription cannot overlap the next poll.
+async function poll(): Promise<void> {
+  try { await tick(); }
+  catch (error) { console.error("[worker] poll failed:", error); }
+  finally { setTimeout(() => void poll(), env.WORKER_POLL_MS); }
+}
+await poll();
